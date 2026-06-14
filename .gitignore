@@ -1,0 +1,6 @@
+bot/.env
+bot/venv/
+bot/__pycache__/
+**/__pycache__/
+*.py[cod]
+.vscode/
