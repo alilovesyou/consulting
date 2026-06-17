@@ -107,12 +107,15 @@ async def pay_cash(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
     course_info = f"{data['selected_lang']} ({data['selected_pack']})"
     
     # Bazaga yozamiz (Naqd pul bo'lsa rasm yo'q)
+    from database.db import add_payment, get_user
     payment_id = await add_payment(callback.from_user.id, course_info, 'cash', None)
     user_data = await get_user(callback.from_user.id)
     
     # Adminga xabar beramiz
+    import os
     admin_id = os.getenv("ADMIN_ID")
     if admin_id:
+        from utils.states import AdminApproveCB, AdminRejectCB
         admin_text = (
             f"💵 <b>Yangi NAQD to'lov so'rovi!</b>\n\n"
             f"🆔 ID: {payment_id}\n"
@@ -120,7 +123,19 @@ async def pay_cash(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
             f"📞 Telefon: {user_data['phone']}\n"
             f"📚 Kurs: {course_info}"
         )
-        await bot.send_message(chat_id=admin_id, text=admin_text, parse_mode="HTML")
+        
+        # TASDIQLASH VA RAD ETISH TUGMALARI
+        admin_builder = InlineKeyboardBuilder()
+        admin_builder.button(text="✅ Tasdiqlash", callback_data=AdminApproveCB(payment_id=payment_id))
+        admin_builder.button(text="❌ Rad etish", callback_data=AdminRejectCB(payment_id=payment_id))
+        admin_builder.adjust(2)
+
+        await bot.send_message(
+            chat_id=admin_id, 
+            text=admin_text, 
+            parse_mode="HTML",
+            reply_markup=admin_builder.as_markup()
+        )
     
     await callback.message.edit_text(
         "🏢 <b>Ofisimiz manzili:</b> Sirdaryo viloyati, Guliston shahri, IT Park binosi.\n\n"

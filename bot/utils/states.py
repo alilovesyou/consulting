@@ -7,6 +7,7 @@ class Registration(StatesGroup):
     phone = State()     
     region = State()    
     age = State()     
+    confirm = State()
 
 class RegionCB(CallbackData, prefix="reg"):
     name: str
@@ -35,3 +36,63 @@ class AdminRejectCB(CallbackData, prefix="adm_rej"):
 class AdminGroupCB(CallbackData, prefix="adm_grp"):
     payment_id: int
     group_id: int
+
+class TeacherRegistration(StatesGroup):
+    fio = State()
+    phone = State()
+    region = State()
+    age = State()           
+    lang = State()
+    experience = State() 
+    confirm = State()      
+
+class AdminTeacherApproveCB(CallbackData, prefix="adm_t_app"):
+    teacher_id: int
+
+class AdminTeacherRejectCB(CallbackData, prefix="adm_t_rej"):
+    teacher_id: int
+
+class UploadLesson(StatesGroup):
+    title = State()      
+    material = State()  
+
+class GroupManageCB(CallbackData, prefix="g_man"):
+    group_id: int
+    action: str       
+class StudentGroupCB(CallbackData, prefix="st_grp"):
+    group_id: int
+
+class LessonCB(CallbackData, prefix="st_les"):
+    lesson_id: int
+
+class CreateGroup(StatesGroup):
+    name = State()
+    language = State()
+    capacity = State()
+    link = State()
+    teacher = State()
+
+class AssignTeacherCB(CallbackData, prefix="ass_tch"):
+    teacher_id: int
+class ResultEntry(StatesGroup):
+    title = State()
+    score = State()
+    comment = State()
+
+class KickRequestState(StatesGroup):
+    reason = State()
+
+class TeacherGroupCB(CallbackData, prefix="t_grp"):
+    group_id: int
+    action: str
+
+class TeacherStudentCB(CallbackData, prefix="t_st"):
+    group_id: int
+    student_id: int
+    action: str
+
+class KickApproveCB(CallbackData, prefix="kick_app"):
+    request_id: int
+
+class KickRejectCB(CallbackData, prefix="kick_rej"):
+    request_id: int
