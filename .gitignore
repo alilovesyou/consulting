@@ -27,7 +27,9 @@ __pycache__/
 # BOT MEDIA FILES
 # Cheklar, video darslar, local uploads
 # =========================
-bot/media/*
+
+bot/media/**
+!bot/media/
 !bot/media/.gitkeep
 !bot/media/lessons/
 !bot/media/lessons/.gitkeep
@@ -38,7 +40,7 @@ bot/media/*
 # NODE / FRONTEND
 # =========================
 frontend-miniapp/node_modules/
-frontend-miniapp/dist/
+frontend-miniapp/dist/D
 frontend-miniapp/.vite/
 frontend-miniapp/.cache/
 
