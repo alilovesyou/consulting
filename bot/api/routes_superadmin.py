@@ -13,6 +13,17 @@ from database.db import (
     get_api_superadmin_user,
     get_api_superadmin_users,
     update_user_role,
+    get_api_superadmin_admin_actions,
+    upsert_admin_user,
+    remove_admin_role,
+    get_api_superadmin_teachers_overview,
+    get_api_superadmin_teacher_groups,
+    get_api_superadmin_groups_overview,
+    get_api_superadmin_group_students,
+    get_api_superadmin_students_overview,
+    get_api_superadmin_student_results,
+    get_api_superadmin_all_results,
+    log_admin_action
 )
 
 router = APIRouter(prefix="/api/superadmin", tags=["Superadmin"])
@@ -150,4 +161,171 @@ async def superadmin_admins(
     return {
         "ok": True,
         "admins": [dict(admin) for admin in admins]
+    }
+
+class AddAdminPayload(BaseModel):
+    telegram_id: int
+    full_name: Optional[str] = None
+
+
+@router.get("/admin-actions")
+async def superadmin_admin_actions(
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    current_user: dict = Depends(require_roles("superadmin"))
+):
+    actions = await get_api_superadmin_admin_actions(limit=limit, offset=offset)
+
+    return {
+        "ok": True,
+        "actions": [dict(action) for action in actions]
+    }
+
+
+@router.post("/admins")
+async def superadmin_add_admin(
+    payload: AddAdminPayload,
+    current_user: dict = Depends(require_roles("superadmin"))
+):
+    await upsert_admin_user(payload.telegram_id, payload.full_name)
+
+    await log_admin_action(
+        admin_id=current_user["telegram_id"],
+        action="superadmin_add_admin",
+        entity_type="user",
+        entity_id=payload.telegram_id,
+        details={
+            "new_admin_id": payload.telegram_id,
+            "full_name": payload.full_name
+        }
+    )
+
+    return {
+        "ok": True,
+        "message": "Admin qo'shildi.",
+        "telegram_id": payload.telegram_id
+    }
+
+
+@router.delete("/admins/{telegram_id}")
+async def superadmin_remove_admin(
+    telegram_id: int,
+    current_user: dict = Depends(require_roles("superadmin"))
+):
+    if telegram_id == current_user["telegram_id"]:
+        raise HTTPException(
+            status_code=400,
+            detail="O'zingizni adminlardan olib tashlay olmaysiz."
+        )
+
+    await remove_admin_role(telegram_id)
+
+    await log_admin_action(
+        admin_id=current_user["telegram_id"],
+        action="superadmin_remove_admin",
+        entity_type="user",
+        entity_id=telegram_id,
+        details={
+            "removed_admin_id": telegram_id
+        }
+    )
+
+    return {
+        "ok": True,
+        "message": "Admin roli olib tashlandi.",
+        "telegram_id": telegram_id
+    }
+
+
+@router.get("/teachers")
+async def superadmin_teachers_overview(
+    current_user: dict = Depends(require_roles("superadmin"))
+):
+    teachers = await get_api_superadmin_teachers_overview()
+
+    return {
+        "ok": True,
+        "teachers": [dict(teacher) for teacher in teachers]
+    }
+
+
+@router.get("/teachers/{teacher_id}/groups")
+async def superadmin_teacher_groups(
+    teacher_id: int,
+    current_user: dict = Depends(require_roles("superadmin"))
+):
+    groups = await get_api_superadmin_teacher_groups(teacher_id)
+
+    return {
+        "ok": True,
+        "teacher_id": teacher_id,
+        "groups": [dict(group) for group in groups]
+    }
+
+
+@router.get("/groups")
+async def superadmin_groups_overview(
+    current_user: dict = Depends(require_roles("superadmin"))
+):
+    groups = await get_api_superadmin_groups_overview()
+
+    return {
+        "ok": True,
+        "groups": [dict(group) for group in groups]
+    }
+
+
+@router.get("/groups/{group_id}/students")
+async def superadmin_group_students(
+    group_id: int,
+    current_user: dict = Depends(require_roles("superadmin"))
+):
+    students = await get_api_superadmin_group_students(group_id)
+
+    return {
+        "ok": True,
+        "group_id": group_id,
+        "students": [dict(student) for student in students]
+    }
+
+
+@router.get("/students")
+async def superadmin_students_overview(
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    current_user: dict = Depends(require_roles("superadmin"))
+):
+    students = await get_api_superadmin_students_overview(limit=limit, offset=offset)
+
+    return {
+        "ok": True,
+        "students": [dict(student) for student in students]
+    }
+
+
+@router.get("/students/{student_id}/results")
+async def superadmin_student_results(
+    student_id: int,
+    current_user: dict = Depends(require_roles("superadmin"))
+):
+    results = await get_api_superadmin_student_results(student_id)
+
+    return {
+        "ok": True,
+        "student_id": student_id,
+        "results": [dict(result) for result in results]
+    }
+
+
+@router.get("/results")
+async def superadmin_all_results(
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    current_user: dict = Depends(require_roles("superadmin"))
+):
+    results = await get_api_superadmin_all_results(limit=limit, offset=offset)
+
+    return {
+        "ok": True,
+        "results": [dict(result) for result in results]
     }

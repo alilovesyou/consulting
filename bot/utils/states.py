@@ -96,3 +96,10 @@ class KickApproveCB(CallbackData, prefix="kick_app"):
 
 class KickRejectCB(CallbackData, prefix="kick_rej"):
     request_id: int
+class AddAdminState(StatesGroup):
+    telegram_id = State()
+    full_name = State()
+
+
+class RemoveAdminCB(CallbackData, prefix="rm_admin"):
+    telegram_id: int

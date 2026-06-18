@@ -981,3 +981,395 @@ async def get_api_superadmin_admins():
     """
     async with pool.acquire() as connection:
         return await connection.fetch(query)
+    
+async def log_admin_action(admin_id: int, action: str, entity_type: str = None, entity_id: int = None, details: dict = None):
+    """Admin qilgan harakatni log qilish"""
+    import json
+
+    query = """
+    INSERT INTO admin_actions (admin_id, action, entity_type, entity_id, details)
+    VALUES ($1, $2, $3, $4, $5::jsonb)
+    RETURNING id
+    """
+    async with pool.acquire() as connection:
+        return await connection.fetchval(
+            query,
+            admin_id,
+            action,
+            entity_type,
+            entity_id,
+            json.dumps(details or {})
+        )
+
+
+async def get_superadmin_ids():
+    """Barcha superadmin telegram_id larini olish"""
+    query = "SELECT telegram_id FROM users WHERE role = 'superadmin'"
+    async with pool.acquire() as connection:
+        rows = await connection.fetch(query)
+        return [row["telegram_id"] for row in rows]
+
+
+async def get_api_superadmin_admin_actions(limit: int = 100, offset: int = 0):
+    """Superadmin uchun admin action history"""
+    query = """
+    SELECT
+        aa.id,
+        aa.admin_id,
+        u.full_name AS admin_name,
+        aa.action,
+        aa.entity_type,
+        aa.entity_id,
+        aa.details,
+        aa.created_at
+    FROM admin_actions aa
+    LEFT JOIN users u ON u.telegram_id = aa.admin_id
+    ORDER BY aa.created_at DESC
+    LIMIT $1 OFFSET $2
+    """
+    async with pool.acquire() as connection:
+        return await connection.fetch(query, limit, offset)
+
+
+async def upsert_admin_user(telegram_id: int, full_name: str = None):
+    """Superadmin yangi admin qo'shishi uchun"""
+    query = """
+    INSERT INTO users (telegram_id, full_name, role)
+    VALUES ($1, $2, 'admin')
+    ON CONFLICT (telegram_id)
+    DO UPDATE SET role = 'admin',
+                  full_name = COALESCE($2, users.full_name)
+    """
+    async with pool.acquire() as connection:
+        await connection.execute(query, telegram_id, full_name)
+
+
+async def remove_admin_role(telegram_id: int):
+    """Adminni oddiy userga tushirish. Superadminni o'zgartirmaydi."""
+    query = """
+    UPDATE users
+    SET role = 'user'
+    WHERE telegram_id = $1
+      AND role = 'admin'
+    """
+    async with pool.acquire() as connection:
+        await connection.execute(query, telegram_id)
+
+
+async def get_api_superadmin_teachers_overview():
+    """Superadmin uchun barcha ustozlar va ularning guruh/student soni"""
+    query = """
+    SELECT
+        u.telegram_id,
+        u.full_name,
+        u.phone,
+        u.region,
+        u.age,
+        u.teach_lang,
+        u.created_at,
+        COUNT(DISTINCT g.id)::INT AS groups_count,
+        COUNT(gs.user_id)::INT AS students_count
+    FROM users u
+    LEFT JOIN groups g ON g.teacher_id = u.telegram_id AND g.is_active = TRUE
+    LEFT JOIN group_students gs ON gs.group_id = g.id
+    WHERE u.role = 'teacher'
+    GROUP BY u.telegram_id, u.full_name, u.phone, u.region, u.age, u.teach_lang, u.created_at
+    ORDER BY u.full_name ASC
+    """
+    async with pool.acquire() as connection:
+        return await connection.fetch(query)
+
+
+async def get_api_superadmin_teacher_groups(teacher_id: int):
+    """Superadmin uchun bitta ustoz guruhlari"""
+    query = """
+    SELECT
+        g.id,
+        g.name,
+        g.language,
+        g.max_capacity,
+        COUNT(gs.user_id)::INT AS current_count,
+        g.telegram_link,
+        g.created_at
+    FROM groups g
+    LEFT JOIN group_students gs ON gs.group_id = g.id
+    WHERE g.teacher_id = $1
+      AND g.is_active = TRUE
+    GROUP BY g.id, g.name, g.language, g.max_capacity, g.telegram_link, g.created_at
+    ORDER BY g.id ASC
+    """
+    async with pool.acquire() as connection:
+        return await connection.fetch(query, teacher_id)
+
+
+async def get_api_superadmin_groups_overview():
+    """Superadmin uchun barcha guruhlar"""
+    query = """
+    SELECT
+        g.id,
+        g.name,
+        g.language,
+        g.teacher_id,
+        t.full_name AS teacher_name,
+        g.max_capacity,
+        COUNT(gs.user_id)::INT AS current_count,
+        g.telegram_link,
+        g.is_active,
+        g.created_at
+    FROM groups g
+    LEFT JOIN users t ON t.telegram_id = g.teacher_id
+    LEFT JOIN group_students gs ON gs.group_id = g.id
+    WHERE g.is_active = TRUE
+    GROUP BY g.id, g.name, g.language, g.teacher_id, t.full_name, g.max_capacity, g.telegram_link, g.is_active, g.created_at
+    ORDER BY g.id ASC
+    """
+    async with pool.acquire() as connection:
+        return await connection.fetch(query)
+
+
+async def get_api_superadmin_group_students(group_id: int):
+    """Superadmin uchun guruh ichidagi o'quvchilar"""
+    query = """
+    SELECT
+        u.telegram_id,
+        u.full_name,
+        u.phone,
+        u.region,
+        u.age,
+        gs.created_at AS joined_at
+    FROM group_students gs
+    JOIN users u ON u.telegram_id = gs.user_id
+    WHERE gs.group_id = $1
+    ORDER BY u.full_name ASC
+    """
+    async with pool.acquire() as connection:
+        return await connection.fetch(query, group_id)
+
+
+async def get_api_superadmin_students_overview(limit: int = 100, offset: int = 0):
+    """Superadmin uchun o'quvchilar ro'yxati"""
+    query = """
+    SELECT
+        u.telegram_id,
+        u.full_name,
+        u.phone,
+        u.region,
+        u.age,
+        u.created_at,
+        COUNT(DISTINCT gs.group_id)::INT AS groups_count,
+        COUNT(sr.id)::INT AS results_count
+    FROM users u
+    LEFT JOIN group_students gs ON gs.user_id = u.telegram_id
+    LEFT JOIN student_results sr ON sr.user_id = u.telegram_id
+    WHERE u.role = 'student'
+    GROUP BY u.telegram_id, u.full_name, u.phone, u.region, u.age, u.created_at
+    ORDER BY u.created_at DESC
+    LIMIT $1 OFFSET $2
+    """
+    async with pool.acquire() as connection:
+        return await connection.fetch(query, limit, offset)
+
+
+async def get_api_superadmin_student_results(student_id: int):
+    """Superadmin uchun bitta o'quvchi baholari"""
+    query = """
+    SELECT
+        sr.id,
+        sr.result_title,
+        sr.score,
+        sr.comment,
+        sr.created_at,
+        g.name AS group_name,
+        g.language AS group_language,
+        t.full_name AS teacher_name
+    FROM student_results sr
+    LEFT JOIN groups g ON g.id = sr.group_id
+    LEFT JOIN users t ON t.telegram_id = sr.teacher_id
+    WHERE sr.user_id = $1
+    ORDER BY sr.created_at DESC
+    """
+    async with pool.acquire() as connection:
+        return await connection.fetch(query, student_id)
+
+
+async def get_api_superadmin_all_results(limit: int = 100, offset: int = 0):
+    """Superadmin uchun barcha baholar"""
+    query = """
+    SELECT
+        sr.id,
+        sr.user_id,
+        s.full_name AS student_name,
+        sr.teacher_id,
+        t.full_name AS teacher_name,
+        sr.group_id,
+        g.name AS group_name,
+        sr.result_title,
+        sr.score,
+        sr.comment,
+        sr.created_at
+    FROM student_results sr
+    LEFT JOIN users s ON s.telegram_id = sr.user_id
+    LEFT JOIN users t ON t.telegram_id = sr.teacher_id
+    LEFT JOIN groups g ON g.id = sr.group_id
+    ORDER BY sr.created_at DESC
+    LIMIT $1 OFFSET $2
+    """
+    async with pool.acquire() as connection:
+        return await connection.fetch(query, limit, offset)
+    
+async def get_api_superadmin_admin_actions(limit: int = 100, offset: int = 0):
+    """Superadmin uchun admin action history"""
+    query = """
+    SELECT
+        aa.id,
+        aa.admin_id,
+        u.full_name AS admin_name,
+        aa.action,
+        aa.entity_type,
+        aa.entity_id,
+        aa.details,
+        aa.created_at
+    FROM admin_actions aa
+    LEFT JOIN users u ON u.telegram_id = aa.admin_id
+    ORDER BY aa.created_at DESC
+    LIMIT $1 OFFSET $2
+    """
+    async with pool.acquire() as connection:
+        return await connection.fetch(query, limit, offset)
+
+
+async def get_api_superadmin_teachers_overview():
+    """Superadmin uchun barcha ustozlar va ularning guruh/student soni"""
+    query = """
+    SELECT
+        u.telegram_id,
+        u.full_name,
+        u.phone,
+        u.region,
+        u.age,
+        u.teach_lang,
+        u.created_at,
+        COUNT(DISTINCT g.id)::INT AS groups_count,
+        COUNT(gs.user_id)::INT AS students_count
+    FROM users u
+    LEFT JOIN groups g ON g.teacher_id = u.telegram_id AND g.is_active = TRUE
+    LEFT JOIN group_students gs ON gs.group_id = g.id
+    WHERE u.role = 'teacher'
+    GROUP BY u.telegram_id, u.full_name, u.phone, u.region, u.age, u.teach_lang, u.created_at
+    ORDER BY u.full_name ASC
+    """
+    async with pool.acquire() as connection:
+        return await connection.fetch(query)
+
+
+async def get_api_superadmin_teacher_groups(teacher_id: int):
+    """Superadmin uchun bitta ustoz guruhlari"""
+    query = """
+    SELECT
+        g.id,
+        g.name,
+        g.language,
+        g.max_capacity,
+        COUNT(gs.user_id)::INT AS current_count,
+        g.telegram_link,
+        g.created_at
+    FROM groups g
+    LEFT JOIN group_students gs ON gs.group_id = g.id
+    WHERE g.teacher_id = $1
+      AND g.is_active = TRUE
+    GROUP BY g.id, g.name, g.language, g.max_capacity, g.telegram_link, g.created_at
+    ORDER BY g.id ASC
+    """
+    async with pool.acquire() as connection:
+        return await connection.fetch(query, teacher_id)
+
+
+async def get_api_superadmin_group_students(group_id: int):
+    """Superadmin uchun guruh ichidagi o'quvchilar"""
+    query = """
+    SELECT
+        u.telegram_id,
+        u.full_name,
+        u.phone,
+        u.region,
+        u.age,
+        gs.created_at AS joined_at
+    FROM group_students gs
+    JOIN users u ON u.telegram_id = gs.user_id
+    WHERE gs.group_id = $1
+    ORDER BY u.full_name ASC
+    """
+    async with pool.acquire() as connection:
+        return await connection.fetch(query, group_id)
+
+
+async def get_api_superadmin_students_overview(limit: int = 100, offset: int = 0):
+    """Superadmin uchun o'quvchilar ro'yxati"""
+    query = """
+    SELECT
+        u.telegram_id,
+        u.full_name,
+        u.phone,
+        u.region,
+        u.age,
+        u.created_at,
+        COUNT(DISTINCT gs.group_id)::INT AS groups_count,
+        COUNT(sr.id)::INT AS results_count
+    FROM users u
+    LEFT JOIN group_students gs ON gs.user_id = u.telegram_id
+    LEFT JOIN student_results sr ON sr.user_id = u.telegram_id
+    WHERE u.role = 'student'
+    GROUP BY u.telegram_id, u.full_name, u.phone, u.region, u.age, u.created_at
+    ORDER BY u.created_at DESC
+    LIMIT $1 OFFSET $2
+    """
+    async with pool.acquire() as connection:
+        return await connection.fetch(query, limit, offset)
+
+
+async def get_api_superadmin_student_results(student_id: int):
+    """Superadmin uchun bitta o'quvchi baholari"""
+    query = """
+    SELECT
+        sr.id,
+        sr.result_title,
+        sr.score,
+        sr.comment,
+        sr.created_at,
+        g.name AS group_name,
+        g.language AS group_language,
+        t.full_name AS teacher_name
+    FROM student_results sr
+    LEFT JOIN groups g ON g.id = sr.group_id
+    LEFT JOIN users t ON t.telegram_id = sr.teacher_id
+    WHERE sr.user_id = $1
+    ORDER BY sr.created_at DESC
+    """
+    async with pool.acquire() as connection:
+        return await connection.fetch(query, student_id)
+
+
+async def get_api_superadmin_all_results(limit: int = 100, offset: int = 0):
+    """Superadmin uchun barcha baholar"""
+    query = """
+    SELECT
+        sr.id,
+        sr.user_id,
+        s.full_name AS student_name,
+        sr.teacher_id,
+        t.full_name AS teacher_name,
+        sr.group_id,
+        g.name AS group_name,
+        sr.result_title,
+        sr.score,
+        sr.comment,
+        sr.created_at
+    FROM student_results sr
+    LEFT JOIN users s ON s.telegram_id = sr.user_id
+    LEFT JOIN users t ON t.telegram_id = sr.teacher_id
+    LEFT JOIN groups g ON g.id = sr.group_id
+    ORDER BY sr.created_at DESC
+    LIMIT $1 OFFSET $2
+    """
+    async with pool.acquire() as connection:
+        return await connection.fetch(query, limit, offset)
