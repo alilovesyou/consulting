@@ -7,6 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import WebAppInfo
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+
 from database.db import (
     add_user,
     update_user_profile,
