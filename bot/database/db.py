@@ -1008,6 +1008,20 @@ async def get_superadmin_ids():
     async with pool.acquire() as connection:
         rows = await connection.fetch(query)
         return [row["telegram_id"] for row in rows]
+    
+async def get_payment_admin_ids():
+    """
+    To'lov cheklari va ustoz arizalarini oladigan adminlar:
+    oddiy admin + superadmin.
+    """
+    query = """
+    SELECT telegram_id
+    FROM users
+    WHERE role IN ('admin', 'superadmin')
+    """
+    async with pool.acquire() as connection:
+        rows = await connection.fetch(query)
+        return [row["telegram_id"] for row in rows]
 
 
 async def get_api_superadmin_admin_actions(limit: int = 100, offset: int = 0):
@@ -1373,3 +1387,66 @@ async def get_api_superadmin_all_results(limit: int = 100, offset: int = 0):
     """
     async with pool.acquire() as connection:
         return await connection.fetch(query, limit, offset)
+    
+async def get_api_superadmin_teachers_by_language(language: str):
+    """Til bo'yicha ustozlar ro'yxati"""
+    query = """
+    SELECT
+        u.telegram_id,
+        u.full_name,
+        u.phone,
+        u.region,
+        u.age,
+        u.teach_lang,
+        u.created_at,
+        COUNT(DISTINCT g.id)::INT AS groups_count,
+        COUNT(gs.user_id)::INT AS students_count
+    FROM users u
+    LEFT JOIN groups g ON g.teacher_id = u.telegram_id AND g.is_active = TRUE
+    LEFT JOIN group_students gs ON gs.group_id = g.id
+    WHERE u.role = 'teacher'
+      AND u.teach_lang = $1
+    GROUP BY u.telegram_id, u.full_name, u.phone, u.region, u.age, u.teach_lang, u.created_at
+    ORDER BY u.full_name ASC
+    """
+    async with pool.acquire() as connection:
+        return await connection.fetch(query, language)
+
+
+async def get_api_superadmin_student_profile(student_id: int):
+    """Bitta o'quvchi haqida to'liqroq ma'lumot"""
+    query = """
+    SELECT
+        u.telegram_id,
+        u.full_name,
+        u.phone,
+        u.region,
+        u.age,
+        u.role,
+        u.created_at,
+        COUNT(DISTINCT gs.group_id)::INT AS groups_count,
+        COUNT(sr.id)::INT AS results_count
+    FROM users u
+    LEFT JOIN group_students gs ON gs.user_id = u.telegram_id
+    LEFT JOIN student_results sr ON sr.user_id = u.telegram_id
+    WHERE u.telegram_id = $1
+    GROUP BY u.telegram_id, u.full_name, u.phone, u.region, u.age, u.role, u.created_at
+    """
+    async with pool.acquire() as connection:
+        return await connection.fetchrow(query, student_id)
+async def get_user_interface_lang(telegram_id: int):
+    """Foydalanuvchining bot interface tilini olish"""
+    query = "SELECT interface_lang FROM users WHERE telegram_id = $1"
+    async with pool.acquire() as connection:
+        return await connection.fetchval(query, telegram_id)
+
+
+async def set_user_interface_lang(telegram_id: int, lang: str):
+    """Foydalanuvchining bot interface tilini saqlash"""
+    query = """
+    UPDATE users
+    SET interface_lang = $1
+    WHERE telegram_id = $2
+    """
+    async with pool.acquire() as connection:
+        await connection.execute(query, lang, telegram_id)

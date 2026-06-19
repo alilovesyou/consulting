@@ -52,7 +52,8 @@ class RejectPayload(BaseModel):
 
 # ==========================================
 # ADMIN + SUPERADMIN
-# Oddiy admin faqat statistika va payment checklarni ko'radi/tasdiqlaydi.
+# Admin ham, Superadmin ham platformani boshqara oladi.
+# Faqat admin qo'shish / adminni olib tashlash routes_superadmin.py da qoladi.
 # ==========================================
 
 @router.get("/statistics")
@@ -176,13 +177,13 @@ async def reject_payment(
 
 
 # ==========================================
-# SUPERADMIN ONLY
-# Guruh, ustoz, teacher application va kick-request boshqaruvi.
+# GROUP MANAGEMENT
+# Admin + Superadmin
 # ==========================================
 
 @router.get("/groups")
 async def admin_groups(
-    current_user: dict = Depends(require_roles("superadmin"))
+    current_user: dict = Depends(require_roles("admin", "superadmin"))
 ):
     groups = await get_api_admin_groups()
 
@@ -195,7 +196,7 @@ async def admin_groups(
 @router.post("/groups")
 async def create_group(
     payload: CreateGroupPayload,
-    current_user: dict = Depends(require_roles("superadmin"))
+    current_user: dict = Depends(require_roles("admin", "superadmin"))
 ):
     if payload.max_capacity <= 0:
         raise HTTPException(status_code=400, detail="Guruh sig'imi 0 dan katta bo'lishi kerak.")
@@ -233,7 +234,7 @@ async def create_group(
 async def change_teacher(
     group_id: int,
     payload: ChangeTeacherPayload,
-    current_user: dict = Depends(require_roles("superadmin"))
+    current_user: dict = Depends(require_roles("admin", "superadmin"))
 ):
     await change_group_teacher(group_id, payload.teacher_id)
 
@@ -259,7 +260,7 @@ async def change_teacher(
 @router.delete("/groups/{group_id}")
 async def remove_group(
     group_id: int,
-    current_user: dict = Depends(require_roles("superadmin"))
+    current_user: dict = Depends(require_roles("admin", "superadmin"))
 ):
     await delete_group(group_id)
 
@@ -280,9 +281,14 @@ async def remove_group(
     }
 
 
+# ==========================================
+# TEACHER MANAGEMENT
+# Admin + Superadmin
+# ==========================================
+
 @router.get("/teachers")
 async def admin_teachers(
-    current_user: dict = Depends(require_roles("superadmin"))
+    current_user: dict = Depends(require_roles("admin", "superadmin"))
 ):
     teachers = await get_api_admin_teachers()
 
@@ -295,7 +301,7 @@ async def admin_teachers(
 @router.get("/teacher-applications")
 async def teacher_applications(
     status: str = Query(default="pending_teacher"),
-    current_user: dict = Depends(require_roles("superadmin"))
+    current_user: dict = Depends(require_roles("admin", "superadmin"))
 ):
     allowed_statuses = ["pending_teacher", "rejected_teacher", "teacher"]
 
@@ -314,7 +320,7 @@ async def teacher_applications(
 @router.post("/teacher-applications/{teacher_id}/approve")
 async def approve_teacher_application(
     teacher_id: int,
-    current_user: dict = Depends(require_roles("superadmin"))
+    current_user: dict = Depends(require_roles("admin", "superadmin"))
 ):
     await update_teacher_status(teacher_id, "teacher")
 
@@ -340,7 +346,7 @@ async def approve_teacher_application(
 async def reject_teacher_application(
     teacher_id: int,
     payload: RejectPayload = RejectPayload(),
-    current_user: dict = Depends(require_roles("superadmin"))
+    current_user: dict = Depends(require_roles("admin", "superadmin"))
 ):
     await update_teacher_status(teacher_id, "rejected_teacher")
 
@@ -364,10 +370,15 @@ async def reject_teacher_application(
     }
 
 
+# ==========================================
+# KICK REQUEST MANAGEMENT
+# Admin + Superadmin
+# ==========================================
+
 @router.get("/kick-requests")
 async def admin_kick_requests(
     status: Optional[str] = Query(default=None),
-    current_user: dict = Depends(require_roles("superadmin"))
+    current_user: dict = Depends(require_roles("admin", "superadmin"))
 ):
     allowed_statuses = [None, "pending", "approved", "rejected"]
 
@@ -386,7 +397,7 @@ async def admin_kick_requests(
 @router.post("/kick-requests/{request_id}/approve")
 async def approve_kick_request(
     request_id: int,
-    current_user: dict = Depends(require_roles("superadmin"))
+    current_user: dict = Depends(require_roles("admin", "superadmin"))
 ):
     request = await get_kick_request(request_id)
 
@@ -425,7 +436,7 @@ async def approve_kick_request(
 async def reject_kick_request(
     request_id: int,
     payload: RejectPayload = RejectPayload(),
-    current_user: dict = Depends(require_roles("superadmin"))
+    current_user: dict = Depends(require_roles("admin", "superadmin"))
 ):
     request = await get_kick_request(request_id)
 

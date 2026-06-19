@@ -103,3 +103,5 @@ class AddAdminState(StatesGroup):
 
 class RemoveAdminCB(CallbackData, prefix="rm_admin"):
     telegram_id: int
+class LangSelectCB(CallbackData, prefix="ui_lang"):
+    lang: str
