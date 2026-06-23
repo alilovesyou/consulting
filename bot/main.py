@@ -9,8 +9,10 @@ from dotenv import load_dotenv
 
 from api.app import app
 from database.db import init_db
+
 from handlers.user import user_router
 from handlers.courses import courses_router
+from handlers.accounting import accounting_router
 from handlers.admin import admin_router
 from handlers.teacher import teacher_router
 from handlers.student import student_router
@@ -21,11 +23,20 @@ TOKEN = os.getenv("BOT_TOKEN")
 API_HOST = os.getenv("API_HOST", "127.0.0.1")
 API_PORT = int(os.getenv("API_PORT", "8000"))
 
+if not TOKEN:
+    raise ValueError("BOT_TOKEN .env ichida topilmadi!")
+
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
+# Router order muhim:
+# 1. user/courses
+# 2. accounting — payment callbacklarni ushlaydi
+# 3. admin — admin/superadmin management
+# 4. teacher/student
 dp.include_router(user_router)
 dp.include_router(courses_router)
+dp.include_router(accounting_router)
 dp.include_router(admin_router)
 dp.include_router(teacher_router)
 dp.include_router(student_router)

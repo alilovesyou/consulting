@@ -250,9 +250,17 @@ async def create_new_group(name: str, language: str, max_capacity: int, telegram
     query = """
     INSERT INTO groups (name, language, max_capacity, telegram_link, teacher_id, is_active)
     VALUES ($1, $2, $3, $4, $5, TRUE)
+    RETURNING id
     """
     async with pool.acquire() as connection:
-        await connection.execute(query, name, language, max_capacity, telegram_link, teacher_id)
+        return await connection.fetchval(
+            query,
+            name,
+            language,
+            max_capacity,
+            telegram_link,
+            teacher_id
+        )
 
 async def get_bot_statistics():
     """Platformadagi umumiy statistikani hisoblash"""
@@ -434,6 +442,7 @@ async def get_api_user_profile(telegram_id: int):
         age,
         role,
         teach_lang,
+        interface_lang,
         created_at
     FROM users
     WHERE telegram_id = $1
@@ -639,10 +648,15 @@ async def get_api_admin_statistics():
     async with pool.acquire() as connection:
         students = await connection.fetchval("SELECT COUNT(*) FROM users WHERE role = 'student'")
         teachers = await connection.fetchval("SELECT COUNT(*) FROM users WHERE role = 'teacher'")
-        admins = await connection.fetchval("SELECT COUNT(*) FROM users WHERE role IN ('admin', 'superadmin')")
+        admins = await connection.fetchval("SELECT COUNT(*) FROM users WHERE role = 'admin'")
+        accountants = await connection.fetchval("SELECT COUNT(*) FROM users WHERE role = 'accountant'")
+        superadmins = await connection.fetchval("SELECT COUNT(*) FROM users WHERE role = 'superadmin'")
+        staff_total = await connection.fetchval("SELECT COUNT(*) FROM users WHERE role IN ('admin', 'accountant', 'superadmin')")
+
         groups = await connection.fetchval("SELECT COUNT(*) FROM groups WHERE is_active = TRUE")
         pending_payments = await connection.fetchval("SELECT COUNT(*) FROM payments WHERE status = 'pending'")
         approved_payments = await connection.fetchval("SELECT COUNT(*) FROM payments WHERE status = 'approved'")
+        rejected_payments = await connection.fetchval("SELECT COUNT(*) FROM payments WHERE status = 'rejected'")
         pending_teachers = await connection.fetchval("SELECT COUNT(*) FROM users WHERE role = 'pending_teacher'")
         pending_kicks = await connection.fetchval("SELECT COUNT(*) FROM kick_requests WHERE status = 'pending'")
 
@@ -650,9 +664,13 @@ async def get_api_admin_statistics():
             "students": students,
             "teachers": teachers,
             "admins": admins,
+            "accountants": accountants,
+            "superadmins": superadmins,
+            "staff_total": staff_total,
             "groups": groups,
             "pending_payments": pending_payments,
             "approved_payments": approved_payments,
+            "rejected_payments": rejected_payments,
             "pending_teachers": pending_teachers,
             "pending_kicks": pending_kicks
         }
@@ -800,6 +818,7 @@ async def get_api_superadmin_statistics():
         pending_teachers = await connection.fetchval("SELECT COUNT(*) FROM users WHERE role = 'pending_teacher'")
         rejected_teachers = await connection.fetchval("SELECT COUNT(*) FROM users WHERE role = 'rejected_teacher'")
         admins = await connection.fetchval("SELECT COUNT(*) FROM users WHERE role = 'admin'")
+        accountants = await connection.fetchval("SELECT COUNT(*) FROM users WHERE role = 'accountant'")
         superadmins = await connection.fetchval("SELECT COUNT(*) FROM users WHERE role = 'superadmin'")
 
         groups = await connection.fetchval("SELECT COUNT(*) FROM groups WHERE is_active = TRUE")
@@ -809,6 +828,12 @@ async def get_api_superadmin_statistics():
         payments_pending = await connection.fetchval("SELECT COUNT(*) FROM payments WHERE status = 'pending'")
         payments_approved = await connection.fetchval("SELECT COUNT(*) FROM payments WHERE status = 'approved'")
         payments_rejected = await connection.fetchval("SELECT COUNT(*) FROM payments WHERE status = 'rejected'")
+        payments_cash_pending = await connection.fetchval(
+            "SELECT COUNT(*) FROM payments WHERE status = 'pending' AND payment_method = 'cash'"
+        )
+        payments_card_pending = await connection.fetchval(
+            "SELECT COUNT(*) FROM payments WHERE status = 'pending' AND payment_method = 'card'"
+        )
 
         lessons = await connection.fetchval("SELECT COUNT(*) FROM lessons")
         results = await connection.fetchval("SELECT COUNT(*) FROM student_results")
@@ -824,6 +849,7 @@ async def get_api_superadmin_statistics():
                 "pending_teacher": pending_teachers,
                 "rejected_teacher": rejected_teachers,
                 "admin": admins,
+                "accountant": accountants,
                 "superadmin": superadmins
             },
             "groups": {
@@ -834,7 +860,9 @@ async def get_api_superadmin_statistics():
                 "total": payments_total,
                 "pending": payments_pending,
                 "approved": payments_approved,
-                "rejected": payments_rejected
+                "rejected": payments_rejected,
+                "cash_pending": payments_cash_pending,
+                "card_pending": payments_card_pending
             },
             "education": {
                 "lessons": lessons,
@@ -959,7 +987,10 @@ async def count_superadmins():
 
 
 async def get_api_superadmin_admins():
-    """Admin va superadminlar ro'yxati"""
+    """
+    Legacy endpoint uchun staff ro'yxati.
+    Oldin faqat admin/superadmin edi, endi accountant ham qo'shildi.
+    """
     query = """
     SELECT
         telegram_id,
@@ -970,12 +1001,13 @@ async def get_api_superadmin_admins():
         role,
         created_at
     FROM users
-    WHERE role IN ('admin', 'superadmin')
+    WHERE role IN ('admin', 'accountant', 'superadmin')
     ORDER BY 
         CASE 
             WHEN role = 'superadmin' THEN 1
             WHEN role = 'admin' THEN 2
-            ELSE 3
+            WHEN role = 'accountant' THEN 3
+            ELSE 4
         END,
         created_at DESC
     """
@@ -1450,3 +1482,274 @@ async def set_user_interface_lang(telegram_id: int, lang: str):
     """
     async with pool.acquire() as connection:
         await connection.execute(query, lang, telegram_id)
+
+# ==========================================
+# ACCOUNTING / STAFF ROLE HELPERS
+# ==========================================
+
+async def get_accounting_staff_ids():
+    """
+    To'lovlar bilan ishlaydigan xodimlar:
+    accountant + admin + superadmin.
+    Payment notification va accounting panel uchun.
+    """
+    query = """
+    SELECT telegram_id
+    FROM users
+    WHERE role IN ('accountant', 'admin', 'superadmin')
+    """
+    async with pool.acquire() as connection:
+        rows = await connection.fetch(query)
+        return [row["telegram_id"] for row in rows]
+
+
+async def get_management_staff_ids():
+    """
+    Management notification oladiganlar:
+    admin + superadmin.
+    Teacher application, kick request kabi narsalar accountantga bormaydi.
+    """
+    query = """
+    SELECT telegram_id
+    FROM users
+    WHERE role IN ('admin', 'superadmin')
+    """
+    async with pool.acquire() as connection:
+        rows = await connection.fetch(query)
+        return [row["telegram_id"] for row in rows]
+
+
+async def get_staff_users(role: str | None = None):
+    """
+    Superadmin uchun staff ro'yxati:
+    admin/accountant/superadmin.
+    """
+    if role:
+        query = """
+        SELECT telegram_id, full_name, phone, region, role, interface_lang, created_at
+        FROM users
+        WHERE role = $1
+        ORDER BY created_at DESC
+        """
+        async with pool.acquire() as connection:
+            return await connection.fetch(query, role)
+
+    query = """
+    SELECT telegram_id, full_name, phone, region, role, interface_lang, created_at
+    FROM users
+    WHERE role IN ('admin', 'accountant', 'superadmin')
+    ORDER BY 
+        CASE 
+            WHEN role = 'superadmin' THEN 1
+            WHEN role = 'admin' THEN 2
+            WHEN role = 'accountant' THEN 3
+            ELSE 4
+        END,
+        created_at DESC
+    """
+    async with pool.acquire() as connection:
+        return await connection.fetch(query)
+
+
+async def get_recent_users_for_role_assignment(limit: int = 10, offset: int = 0):
+    """
+    Superadmin role berishi uchun oxirgi ro'yxatdan o'tgan userlar.
+    Bu Telegram ID qo'lda so'rashni kamaytiradi.
+    """
+    query = """
+    SELECT telegram_id, full_name, phone, region, role, interface_lang, created_at
+    FROM users
+    ORDER BY created_at DESC
+    LIMIT $1 OFFSET $2
+    """
+    async with pool.acquire() as connection:
+        return await connection.fetch(query, limit, offset)
+
+
+async def set_user_role(telegram_id: int, role: str, full_name: str | None = None):
+    """
+    Userga role berish:
+    user/admin/accountant/superadmin/teacher/student va hokazo.
+    Agar user hali botga kirmagan bo'lsa ham row yaratib qo'yadi.
+    """
+    query = """
+    INSERT INTO users (telegram_id, full_name, role, interface_lang)
+    VALUES ($1, $2, $3, 'uz')
+    ON CONFLICT (telegram_id)
+    DO UPDATE SET
+        role = EXCLUDED.role,
+        full_name = COALESCE(users.full_name, EXCLUDED.full_name),
+        interface_lang = COALESCE(users.interface_lang, EXCLUDED.interface_lang)
+    """
+    async with pool.acquire() as connection:
+        await connection.execute(query, telegram_id, full_name, role)
+
+
+# ==========================================
+# ACCOUNTING / PAYMENT QUERIES
+# ==========================================
+
+async def get_accounting_payment_stats():
+    """
+    Accounting panel uchun umumiy payment statistikasi.
+    """
+    query = """
+    SELECT
+        COUNT(*)::INT AS total,
+        COUNT(*) FILTER (WHERE status = 'pending')::INT AS pending,
+        COUNT(*) FILTER (WHERE status = 'approved')::INT AS approved,
+        COUNT(*) FILTER (WHERE status = 'rejected')::INT AS rejected,
+        COUNT(*) FILTER (WHERE status = 'pending' AND payment_method = 'cash')::INT AS cash_pending,
+        COUNT(*) FILTER (WHERE status = 'pending' AND payment_method = 'card')::INT AS card_pending
+    FROM payments
+    """
+    async with pool.acquire() as connection:
+        return await connection.fetchrow(query)
+
+
+async def get_accounting_payments(
+    status: str | None = "pending",
+    payment_method: str | None = None,
+    limit: int = 10,
+    offset: int = 0
+):
+    """
+    Accountant/admin/superadmin uchun payment list.
+    status: pending/approved/rejected yoki None
+    payment_method: cash/card yoki None
+    """
+    query = """
+    SELECT
+        p.id,
+        p.user_id,
+        u.full_name AS student_name,
+        u.phone AS student_phone,
+        u.region AS student_region,
+        COALESCE(p.course_info, p.language) AS course_info,
+        p.payment_method,
+        p.receipt_path,
+        p.status,
+        p.amount,
+        p.created_at,
+        p.approved_at,
+        p.rejected_at,
+        p.reject_reason,
+        p.approved_by,
+        au.full_name AS approved_by_name,
+        p.rejected_by,
+        ru.full_name AS rejected_by_name
+    FROM payments p
+    LEFT JOIN users u ON u.telegram_id = p.user_id
+    LEFT JOIN users au ON au.telegram_id = p.approved_by
+    LEFT JOIN users ru ON ru.telegram_id = p.rejected_by
+    WHERE ($1::TEXT IS NULL OR p.status = $1)
+      AND ($2::TEXT IS NULL OR p.payment_method = $2)
+    ORDER BY p.created_at DESC
+    LIMIT $3 OFFSET $4
+    """
+    async with pool.acquire() as connection:
+        return await connection.fetch(query, status, payment_method, limit, offset)
+
+
+async def get_accounting_payment_detail(payment_id: int):
+    """
+    Bitta payment haqida to'liq ma'lumot.
+    """
+    query = """
+    SELECT
+        p.id,
+        p.user_id,
+        u.full_name AS student_name,
+        u.phone AS student_phone,
+        u.region AS student_region,
+        u.age AS student_age,
+        COALESCE(p.course_info, p.language) AS course_info,
+        p.payment_method,
+        p.receipt_path,
+        p.status,
+        p.amount,
+        p.created_at,
+        p.approved_at,
+        p.rejected_at,
+        p.reject_reason,
+        p.approved_by,
+        au.full_name AS approved_by_name,
+        p.rejected_by,
+        ru.full_name AS rejected_by_name
+    FROM payments p
+    LEFT JOIN users u ON u.telegram_id = p.user_id
+    LEFT JOIN users au ON au.telegram_id = p.approved_by
+    LEFT JOIN users ru ON ru.telegram_id = p.rejected_by
+    WHERE p.id = $1
+    """
+    async with pool.acquire() as connection:
+        return await connection.fetchrow(query, payment_id)
+
+
+async def approve_payment_with_actor(payment_id: int, actor_id: int):
+    """
+    Payment approved qilganda kim approve qilganini saqlaydi.
+    Studentni groupga qo'shish alohida handlerda add_student_to_group_if_capacity bilan qilinadi.
+    """
+    query = """
+    UPDATE payments
+    SET
+        status = 'approved',
+        approved_by = $2,
+        approved_at = CURRENT_TIMESTAMP,
+        rejected_by = NULL,
+        rejected_at = NULL,
+        reject_reason = NULL
+    WHERE id = $1
+    """
+    async with pool.acquire() as connection:
+        await connection.execute(query, payment_id, actor_id)
+
+
+async def reject_payment_with_actor(payment_id: int, actor_id: int, reason: str | None = None):
+    """
+    Payment rejected qilganda kim reject qilganini va sababini saqlaydi.
+    """
+    query = """
+    UPDATE payments
+    SET
+        status = 'rejected',
+        rejected_by = $2,
+        rejected_at = CURRENT_TIMESTAMP,
+        reject_reason = $3
+    WHERE id = $1
+    """
+    async with pool.acquire() as connection:
+        await connection.execute(query, payment_id, actor_id, reason)
+
+
+async def set_payment_amount(payment_id: int, amount: float | None):
+    """
+    Agar keyin accountant summa kiritishi kerak bo'lsa ishlatamiz.
+    """
+    query = """
+    UPDATE payments
+    SET amount = $1
+    WHERE id = $2
+    """
+    async with pool.acquire() as connection:
+        await connection.execute(query, amount, payment_id)
+async def get_admin_action_detail(action_id: int):
+    """Bitta admin/staff action detailini olish"""
+    query = """
+    SELECT
+        aa.id,
+        aa.admin_id,
+        u.full_name AS admin_name,
+        u.role AS admin_role,
+        aa.action,
+        aa.entity_type,
+        aa.entity_id,
+        aa.details,
+        aa.created_at
+    FROM admin_actions aa
+    LEFT JOIN users u ON u.telegram_id = aa.admin_id
+    WHERE aa.id = $1
+    """
+    async with pool.acquire() as connection:
+        return await connection.fetchrow(query, action_id)

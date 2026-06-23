@@ -1,5 +1,6 @@
 # handlers/admin.py
 from html import escape
+import json
 
 from aiogram import Router, types, F
 from aiogram.filters import BaseFilter
@@ -10,10 +11,6 @@ from utils.data import LANGUAGES
 from utils.i18n import t, all_texts
 
 from database.db import (
-    get_payment,
-    update_payment_status,
-    get_active_groups,
-    get_group_link,
     update_teacher_status,
     get_all_teachers,
     create_new_group,
@@ -25,12 +22,8 @@ from database.db import (
     update_kick_request_status,
     remove_student_from_group,
     get_user_role,
-    add_student_to_group_if_capacity,
     log_admin_action,
     get_superadmin_ids,
-    upsert_admin_user,
-    remove_admin_role,
-    get_api_superadmin_admins,
     get_api_superadmin_admin_actions,
     get_api_superadmin_teacher_groups,
     get_api_superadmin_group_students,
@@ -39,10 +32,12 @@ from database.db import (
     get_api_superadmin_teachers_by_language,
     get_api_superadmin_student_profile,
     get_user_interface_lang,
+    get_staff_users,
+    get_recent_users_for_role_assignment,
+    set_user_role,
+    get_admin_action_detail,
 )
 from utils.states import (
-    AdminApproveCB,
-    AdminRejectCB,
     AdminGroupCB,
     AdminTeacherApproveCB,
     AdminTeacherRejectCB,
@@ -50,8 +45,11 @@ from utils.states import (
     AssignTeacherCB,
     KickApproveCB,
     KickRejectCB,
-    AddAdminState,
-    RemoveAdminCB,
+    StaffListCB,
+    StaffUserCB,
+    StaffRoleCB,
+    StaffManualRoleState,
+    StaffManualRoleCB,
 )
 
 admin_router = Router()
@@ -370,7 +368,7 @@ LOCAL_TEXTS = {
     "admin_actions_title": {
         "uz": "📌 <b>Oxirgi admin harakatlari:</b>\n\n",
         "ru": "📌 <b>Последние действия админов:</b>\n\n",
-        "en": "📌 <b>Latest admin actions:</b>\n\n",
+        "en": "📌 <b>Последние действия админов:</b>\n\n",
     },
     "choose_teacher_language": {
         "uz": "👨‍🏫 <b>Qaysi til bo‘yicha ustozlarni ko‘rmoqchisiz?</b>",
@@ -451,6 +449,136 @@ LOCAL_TEXTS = {
         "uz": "📊 <b>Oxirgi barcha natijalar:</b>\n\n",
         "ru": "📊 <b>Последние результаты:</b>\n\n",
         "en": "📊 <b>Latest results:</b>\n\n",
+    },
+    "staff_manage_title": {
+        "uz": "👥 <b>Xodimlarni boshqarish</b>\n\nBu bo‘limda admin, accountant va superadmin rollarini berish yoki olib tashlash mumkin.",
+        "ru": "👥 <b>Управление сотрудниками</b>\n\nВ этом разделе можно выдавать или снимать роли admin, accountant и superadmin.",
+        "en": "👥 <b>Staff management</b>\n\nIn this section, you can assign or remove admin, accountant, and superadmin roles.",
+    },
+    "give_role": {
+        "uz": "➕ Role berish",
+        "ru": "➕ Выдать роль",
+        "en": "➕ Assign role",
+    },
+    "manual_role": {
+        "uz": "🆔 Telegram ID orqali",
+        "ru": "🆔 Через Telegram ID",
+        "en": "🆔 By Telegram ID",
+    },
+    "staff_admins": {
+        "uz": "👨‍💻 Adminlar",
+        "ru": "👨‍💻 Админы",
+        "en": "👨‍💻 Admins",
+    },
+    "staff_accountants": {
+        "uz": "💰 Accountantlar",
+        "ru": "💰 Бухгалтерия",
+        "en": "💰 Accountants",
+    },
+    "staff_superadmins": {
+        "uz": "👑 Superadminlar",
+        "ru": "👑 Superadmins",
+        "en": "👑 Superadmins",
+    },
+    "staff_actions": {
+        "uz": "📌 Staff actionlar",
+        "ru": "📌 Действия сотрудников",
+        "en": "📌 Staff actions",
+    },
+    "recent_users_title": {
+        "uz": "➕ <b>Role berish</b>\n\nOxirgi ro‘yxatdan o‘tgan userlar. Kerakli odamni tanlang:",
+        "ru": "➕ <b>Выдать роль</b>\n\nПоследние зарегистрированные пользователи. Выберите нужного человека:",
+        "en": "➕ <b>Assign role</b>\n\nRecently registered users. Choose the person:",
+    },
+    "staff_list_title": {
+        "uz": "📋 <b>{role} ro‘yxati</b>\n\nKerakli odamni tanlang:",
+        "ru": "📋 <b>Список: {role}</b>\n\nВыберите нужного человека:",
+        "en": "📋 <b>{role} list</b>\n\nChoose the person:",
+    },
+    "staff_empty": {
+        "uz": "Bu ro‘yxatda user topilmadi.",
+        "ru": "В этом списке пользователи не найдены.",
+        "en": "No users found in this list.",
+    },
+    "choose_role": {
+        "uz": "👤 <b>{full_name}</b>\n🆔 <code>{telegram_id}</code>\n🔐 Hozirgi role: <b>{current_role}</b>\n\nQaysi role beramiz?",
+        "ru": "👤 <b>{full_name}</b>\n🆔 <code>{telegram_id}</code>\n🔐 Текущая роль: <b>{current_role}</b>\n\nКакую роль назначить?",
+        "en": "👤 <b>{full_name}</b>\n🆔 <code>{telegram_id}</code>\n🔐 Current role: <b>{current_role}</b>\n\nWhich role should be assigned?",
+    },
+    "role_admin": {
+        "uz": "👨‍💻 Admin",
+        "ru": "👨‍💻 Admin",
+        "en": "👨‍💻 Admin",
+    },
+    "role_accountant": {
+        "uz": "💰 Accountant",
+        "ru": "💰 Accountant",
+        "en": "💰 Accountant",
+    },
+    "role_superadmin": {
+        "uz": "👑 Superadmin",
+        "ru": "👑 Superadmin",
+        "en": "👑 Superadmin",
+    },
+    "role_user": {
+        "uz": "👤 Userga qaytarish",
+        "ru": "👤 Вернуть в user",
+        "en": "👤 Return to user",
+    },
+    "role_set_done": {
+        "uz": "✅ Role muvaffaqiyatli o‘zgartirildi.\n\n👤 User: <code>{telegram_id}</code>\n🔐 Yangi role: <b>{role}</b>",
+        "ru": "✅ Роль успешно изменена.\n\n👤 User: <code>{telegram_id}</code>\n🔐 Новая роль: <b>{role}</b>",
+        "en": "✅ Role changed successfully.\n\n👤 User: <code>{telegram_id}</code>\n🔐 New role: <b>{role}</b>",
+    },
+    "role_notify": {
+        "uz": "🔐 <b>Sizning rolingiz o‘zgartirildi.</b>\n\nYangi role: <b>{role}</b>\n\nIltimos, /start bosib panelni yangilang.",
+        "ru": "🔐 <b>Ваша роль была изменена.</b>\n\nНовая роль: <b>{role}</b>\n\nНажмите /start, чтобы обновить панель.",
+        "en": "🔐 <b>Your role has been changed.</b>\n\nNew role: <b>{role}</b>\n\nPlease press /start to refresh your panel.",
+    },
+    "cannot_change_self": {
+        "uz": "O‘zingizni bu role’ga o‘zgartira olmaysiz.",
+        "ru": "Вы не можете изменить свою роль на эту.",
+        "en": "You cannot change your own role to this.",
+    },
+    "manual_id_request": {
+        "uz": "🆔 Role bermoqchi bo‘lgan odamning Telegram ID raqamini yuboring.\n\nMasalan:\n<code>123456789</code>",
+        "ru": "🆔 Отправьте Telegram ID человека, которому хотите выдать роль.\n\nНапример:\n<code>123456789</code>",
+        "en": "🆔 Send the Telegram ID of the person you want to assign a role to.\n\nExample:\n<code>123456789</code>",
+    },
+    "manual_name_request": {
+        "uz": "Ismini kiriting.\n\nAgar bilmasangiz, `-` yuboring.",
+        "ru": "Введите имя.\n\nЕсли не знаете, отправьте `-`.",
+        "en": "Enter the name.\n\nIf you do not know it, send `-`.",
+    },
+    "prev": {
+        "uz": "⬅️ Oldingi",
+        "ru": "⬅️ Назад",
+        "en": "⬅️ Previous",
+    },
+    "next": {
+        "uz": "Keyingi ➡️",
+        "ru": "Далее ➡️",
+        "en": "Next ➡️",
+    },
+        "actions_list_title": {
+        "uz": "📌 <b>Admin / Staff harakatlari</b>\n\nPage: <b>{page}</b>\n\nDetail ko‘rish uchun actionni tanlang:",
+        "ru": "📌 <b>Действия Admin / Staff</b>\n\nСтраница: <b>{page}</b>\n\nВыберите действие для подробностей:",
+        "en": "📌 <b>Admin / Staff actions</b>\n\nPage: <b>{page}</b>\n\nChoose an action to view details:",
+    },
+    "action_detail_title": {
+        "uz": "📌 <b>Action detail</b>",
+        "ru": "📌 <b>Детали действия</b>",
+        "en": "📌 <b>Action detail</b>",
+    },
+    "action_not_found": {
+        "uz": "Action topilmadi.",
+        "ru": "Действие не найдено.",
+        "en": "Action not found.",
+    },
+    "back_to_actions": {
+        "uz": "🔙 Actionlar ro‘yxati",
+        "ru": "🔙 Список действий",
+        "en": "🔙 Actions list",
     },
 }
 
@@ -551,6 +679,7 @@ async def panel_keyboard_for_user(user_id: int):
 
 def admin_menu_keyboard(lang: str = "uz"):
     kb = [
+        [types.KeyboardButton(text=t("accounting_panel", lang))],
         [types.KeyboardButton(text=t("teachers_view", lang))],
         [
             types.KeyboardButton(text=t("create_group", lang)),
@@ -566,13 +695,13 @@ def admin_menu_keyboard(lang: str = "uz"):
 def superadmin_menu_keyboard(lang: str = "uz"):
     kb = [
         [types.KeyboardButton(text=t("admin_manage", lang))],
+        [types.KeyboardButton(text=t("accounting_panel", lang))],
         [types.KeyboardButton(text=t("teachers_view", lang))],
         [
             types.KeyboardButton(text=t("create_group", lang)),
             types.KeyboardButton(text=t("groups_list", lang)),
         ],
         [types.KeyboardButton(text=t("all_results", lang))],
-        [types.KeyboardButton(text=t("admin_actions", lang))],
         [types.KeyboardButton(text=t("statistics", lang))],
     ]
 
@@ -580,219 +709,7 @@ def superadmin_menu_keyboard(lang: str = "uz"):
 
 
 # ==========================================
-# 1. ADMIN PAYMENT REJECT
-# Admin + Superadmin
-# ==========================================
-
-@admin_router.callback_query(AdminRejectCB.filter())
-async def admin_reject(callback: types.CallbackQuery, callback_data: AdminRejectCB):
-    lang = await user_lang(callback.from_user.id)
-
-    payment_id = callback_data.payment_id
-    payment_data = await get_payment(payment_id)
-
-    if not payment_data:
-        await callback.answer(at("payment_not_found", lang), show_alert=True)
-        return
-
-    if payment_data["status"] != "pending":
-        await callback.answer(at("already_processed", lang), show_alert=True)
-        return
-
-    await update_payment_status(payment_id, "rejected")
-
-    await log_admin_action(
-        admin_id=callback.from_user.id,
-        action="payment_rejected_from_bot",
-        entity_type="payment",
-        entity_id=payment_id,
-        details={
-            "student_id": payment_data["user_id"],
-        },
-    )
-
-    status_text = at("payment_rejected_status", lang)
-
-    if callback.message.photo or callback.message.document:
-        await callback.message.edit_caption(
-            caption=f"{callback.message.html_text}\n\n{status_text}",
-            parse_mode="HTML",
-            reply_markup=None,
-        )
-    else:
-        await callback.message.edit_text(
-            f"{callback.message.html_text}\n\n{status_text}",
-            parse_mode="HTML",
-            reply_markup=None,
-        )
-
-    student_lang = await user_lang(payment_data["user_id"])
-
-    await callback.bot.send_message(
-        chat_id=payment_data["user_id"],
-        text=at("student_payment_rejected", student_lang),
-        parse_mode="HTML",
-    )
-
-    await notify_superadmins(
-        bot=callback.bot,
-        actor_id=callback.from_user.id,
-        text=(
-            "📌 <b>Admin harakati</b>\n\n"
-            f"Admin ID: <code>{callback.from_user.id}</code>\n"
-            f"Action: <b>payment rejected</b>\n"
-            f"Payment ID: <code>{payment_id}</code>\n"
-            f"Student ID: <code>{payment_data['user_id']}</code>"
-        ),
-    )
-
-
-# ==========================================
-# 2. ADMIN PAYMENT APPROVE START
-# Admin + Superadmin
-# ==========================================
-
-@admin_router.callback_query(AdminApproveCB.filter())
-async def admin_approve(callback: types.CallbackQuery, callback_data: AdminApproveCB):
-    lang = await user_lang(callback.from_user.id)
-
-    payment_id = callback_data.payment_id
-    payment_data = await get_payment(payment_id)
-
-    if not payment_data:
-        await callback.answer(at("payment_not_found", lang), show_alert=True)
-        return
-
-    if payment_data["status"] != "pending":
-        await callback.answer(at("already_processed", lang), show_alert=True)
-        return
-
-    groups = await get_active_groups()
-
-    if not groups:
-        await callback.answer(at("no_active_groups", lang), show_alert=True)
-        return
-
-    builder = InlineKeyboardBuilder()
-
-    for grp in groups:
-        btn_text = f"{grp['name']} ({grp['language']}) — {grp['current_count']}/{grp['max_capacity']}"
-        builder.button(
-            text=btn_text,
-            callback_data=AdminGroupCB(payment_id=payment_id, group_id=grp["id"]),
-        )
-
-    builder.adjust(1)
-
-    choose_text = at("choose_group_for_student", lang)
-
-    if callback.message.photo or callback.message.document:
-        await callback.message.edit_caption(
-            caption=f"{callback.message.html_text}\n\n{choose_text}",
-            parse_mode="HTML",
-            reply_markup=builder.as_markup(),
-        )
-    else:
-        await callback.message.edit_text(
-            f"{callback.message.html_text}\n\n{choose_text}",
-            parse_mode="HTML",
-            reply_markup=builder.as_markup(),
-        )
-
-
-# ==========================================
-# 3. ADMIN PAYMENT APPROVE FINAL
-# Admin + Superadmin
-# ==========================================
-
-@admin_router.callback_query(AdminGroupCB.filter(F.payment_id != 0))
-async def admin_assign_group(callback: types.CallbackQuery, callback_data: AdminGroupCB):
-    lang = await user_lang(callback.from_user.id)
-
-    payment_id = callback_data.payment_id
-    group_id = callback_data.group_id
-
-    payment_data = await get_payment(payment_id)
-
-    if not payment_data:
-        await callback.answer(at("payment_not_found", lang), show_alert=True)
-        return
-
-    if payment_data["status"] != "pending":
-        await callback.answer(at("already_processed", lang), show_alert=True)
-        return
-
-    group_data = await get_group_link(group_id)
-
-    if not group_data:
-        await callback.answer(at("group_not_found", lang), show_alert=True)
-        return
-
-    capacity_result = await add_student_to_group_if_capacity(payment_data["user_id"], group_id)
-
-    if not capacity_result["ok"]:
-        await callback.answer(capacity_result["message"], show_alert=True)
-        return
-
-    await update_payment_status(payment_id, "approved")
-
-    await log_admin_action(
-        admin_id=callback.from_user.id,
-        action="payment_approved_from_bot",
-        entity_type="payment",
-        entity_id=payment_id,
-        details={
-            "student_id": payment_data["user_id"],
-            "group_id": group_id,
-            "group_name": group_data["name"],
-            "capacity": capacity_result,
-        },
-    )
-
-    status_text = at("payment_approved_status", lang, group_name=group_data["name"])
-
-    if callback.message.photo or callback.message.document:
-        await callback.message.edit_caption(
-            caption=f"{callback.message.html_text}\n\n{status_text}",
-            parse_mode="HTML",
-            reply_markup=None,
-        )
-    else:
-        await callback.message.edit_text(
-            f"{callback.message.html_text}\n\n{status_text}",
-            parse_mode="HTML",
-            reply_markup=None,
-        )
-
-    student_lang = await user_lang(payment_data["user_id"])
-
-    await callback.bot.send_message(
-        chat_id=payment_data["user_id"],
-        text=at(
-            "student_payment_approved",
-            student_lang,
-            group_name=group_data["name"],
-            group_link=group_data["telegram_link"],
-        ),
-        parse_mode="HTML",
-    )
-
-    await notify_superadmins(
-        bot=callback.bot,
-        actor_id=callback.from_user.id,
-        text=(
-            "📌 <b>Admin harakati</b>\n\n"
-            f"Admin ID: <code>{callback.from_user.id}</code>\n"
-            f"Action: <b>payment approved</b>\n"
-            f"Payment ID: <code>{payment_id}</code>\n"
-            f"Student ID: <code>{payment_data['user_id']}</code>\n"
-            f"Group: <b>{h(group_data['name'])}</b>"
-        ),
-    )
-
-
-# ==========================================
-# 4. TEACHER APPLICATION REJECT
+# 1. TEACHER APPLICATION REJECT
 # Admin + Superadmin
 # ==========================================
 
@@ -850,7 +767,7 @@ async def admin_reject_teacher(callback: types.CallbackQuery, callback_data: Adm
 
 
 # ==========================================
-# 5. TEACHER APPLICATION APPROVE
+# 2. TEACHER APPLICATION APPROVE
 # Admin + Superadmin
 # ==========================================
 
@@ -909,7 +826,7 @@ async def admin_approve_teacher(callback: types.CallbackQuery, callback_data: Ad
 
 
 # ==========================================
-# 6. STATISTICS
+# 3. STATISTICS
 # Admin + Superadmin
 # ==========================================
 
@@ -930,7 +847,7 @@ async def show_statistics(message: types.Message):
 
 
 # ==========================================
-# 7. CREATE GROUP
+# 4. CREATE GROUP
 # Admin + Superadmin
 # ==========================================
 
@@ -1080,7 +997,7 @@ async def cg_teacher(callback: types.CallbackQuery, callback_data: AssignTeacher
 
 
 # ==========================================
-# 8. GROUP MANAGEMENT
+# 5. GROUP MANAGEMENT
 # Admin + Superadmin
 # ==========================================
 
@@ -1215,7 +1132,7 @@ async def delete_group_handler(callback: types.CallbackQuery):
 
 
 # ==========================================
-# 9. KICK REQUEST APPROVE
+# 6. KICK REQUEST APPROVE
 # Admin + Superadmin
 # ==========================================
 
@@ -1291,7 +1208,7 @@ async def approve_kick_request(callback: types.CallbackQuery, callback_data: Kic
 
 
 # ==========================================
-# 10. KICK REQUEST REJECT
+# 7. KICK REQUEST REJECT
 # Admin + Superadmin
 # ==========================================
 
@@ -1358,140 +1275,111 @@ async def reject_kick_request(callback: types.CallbackQuery, callback_data: Kick
 
 
 # ==========================================
-# 11. ADMIN MANAGEMENT
+# 8. STAFF MANAGEMENT
 # Superadmin only
 # ==========================================
 
 @admin_router.message(F.text.in_(all_texts("admin_manage")))
-async def manage_admins_menu(message: types.Message):
+async def manage_staff_menu(message: types.Message):
     lang = await user_lang(message.from_user.id)
 
     if not await require_superadmin_message(message):
         return
 
     builder = InlineKeyboardBuilder()
-    builder.button(text=at("add_admin", lang), callback_data="sa_add_admin")
-    builder.button(text=at("admin_list", lang), callback_data="sa_admin_list")
+
+    builder.button(
+        text=at("give_role", lang),
+        callback_data=StaffListCB(role="recent", page=1)
+    )
+    builder.button(
+        text=at("manual_role", lang),
+        callback_data="staff_manual_role"
+    )
+    builder.button(
+        text=at("staff_admins", lang),
+        callback_data=StaffListCB(role="admin", page=1)
+    )
+    builder.button(
+        text=at("staff_accountants", lang),
+        callback_data=StaffListCB(role="accountant", page=1)
+    )
+    builder.button(
+        text=at("staff_superadmins", lang),
+        callback_data=StaffListCB(role="superadmin", page=1)
+    )
+    builder.button(
+        text=at("staff_actions", lang),
+        callback_data="staff_actions"
+    )
+
     builder.adjust(1)
 
     await message.answer(
-        at("admin_manage_title", lang),
+        at("staff_manage_title", lang),
         parse_mode="HTML",
         reply_markup=builder.as_markup()
     )
 
 
-@admin_router.callback_query(F.data == "sa_add_admin")
-async def start_add_admin(callback: types.CallbackQuery, state: FSMContext):
+@admin_router.callback_query(StaffListCB.filter())
+async def show_staff_list(callback: types.CallbackQuery, callback_data: StaffListCB):
     lang = await user_lang(callback.from_user.id)
 
     if not await require_superadmin_callback(callback):
         return
 
-    await callback.message.edit_text(
-        at("add_admin_request_id", lang),
-        parse_mode="HTML"
-    )
+    page = max(callback_data.page, 1)
+    limit = 10
+    offset = (page - 1) * limit
+    role = callback_data.role
 
-    await state.set_state(AddAdminState.telegram_id)
+    if role == "recent":
+        users = await get_recent_users_for_role_assignment(limit=limit, offset=offset)
+        title = at("recent_users_title", lang)
+    else:
+        users = await get_staff_users(role=role)
+        title = at("staff_list_title", lang, role=role)
 
-
-@admin_router.message(AddAdminState.telegram_id)
-async def process_admin_telegram_id(message: types.Message, state: FSMContext):
-    lang = await user_lang(message.from_user.id)
-
-    if not await require_superadmin_message(message, state):
-        return
-
-    if not message.text.isdigit():
-        await message.answer(at("send_digits_only", lang))
-        return
-
-    await state.update_data(telegram_id=int(message.text))
-
-    await message.answer(at("admin_name_request", lang))
-
-    await state.set_state(AddAdminState.full_name)
-
-
-@admin_router.message(AddAdminState.full_name)
-async def process_admin_full_name(message: types.Message, state: FSMContext):
-    lang = await user_lang(message.from_user.id)
-
-    if not await require_superadmin_message(message, state):
-        return
-
-    data = await state.get_data()
-    telegram_id = data["telegram_id"]
-
-    full_name = message.text.strip()
-    if full_name == "-":
-        full_name = None
-
-    await upsert_admin_user(telegram_id, full_name)
-
-    await log_admin_action(
-        admin_id=message.from_user.id,
-        action="admin_added_from_bot",
-        entity_type="user",
-        entity_id=telegram_id,
-        details={
-            "new_admin_id": telegram_id,
-            "full_name": full_name
-        },
-    )
-
-    new_admin_lang = await user_lang(telegram_id)
-
-    try:
-        await message.bot.send_message(
-            chat_id=telegram_id,
-            text=at("new_admin_message", new_admin_lang),
+    if not users:
+        await callback.message.edit_text(
+            at("staff_empty", lang),
             parse_mode="HTML"
         )
-    except Exception:
-        pass
-
-    await message.answer(
-        at("admin_added", lang, telegram_id=telegram_id),
-        parse_mode="HTML",
-        reply_markup=superadmin_menu_keyboard(lang)
-    )
-
-    await state.clear()
-
-
-@admin_router.callback_query(F.data == "sa_admin_list")
-async def show_admins_list(callback: types.CallbackQuery):
-    lang = await user_lang(callback.from_user.id)
-
-    if not await require_superadmin_callback(callback):
         return
 
-    admins = await get_api_superadmin_admins()
-
-    if not admins:
-        await callback.message.edit_text(at("admins_not_found", lang))
-        return
-
-    text = at("admins_list_title", lang)
+    text = title + "\n\n"
     builder = InlineKeyboardBuilder()
 
-    for admin in admins:
-        telegram_id = admin["telegram_id"]
-        full_name = admin["full_name"] or "Ism yo‘q"
-        role = admin["role"]
+    for user in users[:limit]:
+        telegram_id = user["telegram_id"]
+        full_name = user["full_name"] or "Ism yo‘q"
+        user_role = user["role"] or "user"
+        phone = user["phone"] or "-"
 
         text += (
             f"👤 <b>{h(full_name)}</b>\n"
             f"🆔 <code>{telegram_id}</code>\n"
-            f"🔐 Role: <b>{h(role)}</b>\n\n"
+            f"📞 {h(phone)}\n"
+            f"🔐 Role: <b>{h(user_role)}</b>\n\n"
         )
 
-        if role == "admin":
+        builder.button(
+            text=f"🔐 {full_name[:25]}",
+            callback_data=StaffUserCB(telegram_id=telegram_id)
+        )
+
+    if role == "recent":
+        if page > 1:
             builder.button(
-                text=at("remove_admin_button", lang, name=full_name),
-                callback_data=RemoveAdminCB(telegram_id=telegram_id)
+                text=at("prev", lang),
+                callback_data=StaffListCB(role=role, page=page - 1)
+            )
+
+        if len(users) == limit:
+            builder.button(
+                text=at("next", lang),
+                callback_data=StaffListCB(role=role, page=page + 1)
             )
 
     builder.adjust(1)
@@ -1503,8 +1391,8 @@ async def show_admins_list(callback: types.CallbackQuery):
     )
 
 
-@admin_router.callback_query(RemoveAdminCB.filter())
-async def remove_admin_handler(callback: types.CallbackQuery, callback_data: RemoveAdminCB):
+@admin_router.callback_query(StaffUserCB.filter())
+async def choose_staff_user_role(callback: types.CallbackQuery, callback_data: StaffUserCB):
     lang = await user_lang(callback.from_user.id)
 
     if not await require_superadmin_callback(callback):
@@ -1512,87 +1400,388 @@ async def remove_admin_handler(callback: types.CallbackQuery, callback_data: Rem
 
     telegram_id = callback_data.telegram_id
 
-    if telegram_id == callback.from_user.id:
-        await callback.answer(at("cannot_remove_self", lang), show_alert=True)
+    current_role = await get_user_role(telegram_id)
+
+    # User ma'lumotini olish uchun recent listdan yoki staff listdan alohida profile query yo'q.
+    # Shuning uchun ismni staff/recent listdan emas, qisqa ko'rsatamiz.
+    full_name = str(telegram_id)
+
+    builder = InlineKeyboardBuilder()
+
+    builder.button(
+        text=at("role_admin", lang),
+        callback_data=StaffRoleCB(telegram_id=telegram_id, role="admin")
+    )
+    builder.button(
+        text=at("role_accountant", lang),
+        callback_data=StaffRoleCB(telegram_id=telegram_id, role="accountant")
+    )
+    builder.button(
+        text=at("role_superadmin", lang),
+        callback_data=StaffRoleCB(telegram_id=telegram_id, role="superadmin")
+    )
+    builder.button(
+        text=at("role_user", lang),
+        callback_data=StaffRoleCB(telegram_id=telegram_id, role="user")
+    )
+
+    builder.adjust(1)
+
+    await callback.message.edit_text(
+        at(
+            "choose_role",
+            lang,
+            full_name=h(full_name),
+            telegram_id=telegram_id,
+            current_role=h(current_role)
+        ),
+        parse_mode="HTML",
+        reply_markup=builder.as_markup()
+    )
+
+
+@admin_router.callback_query(StaffRoleCB.filter())
+async def set_staff_role_handler(callback: types.CallbackQuery, callback_data: StaffRoleCB):
+    lang = await user_lang(callback.from_user.id)
+
+    if not await require_superadmin_callback(callback):
         return
 
-    role = await get_user_role(telegram_id)
+    telegram_id = callback_data.telegram_id
+    new_role = callback_data.role
 
-    if role == "superadmin":
-        await callback.answer(at("cannot_remove_superadmin", lang), show_alert=True)
+    # Superadmin o'zini user/admin/accountant qilib yubormasin.
+    if telegram_id == callback.from_user.id and new_role != "superadmin":
+        await callback.answer(at("cannot_change_self", lang), show_alert=True)
         return
 
-    if role != "admin":
-        await callback.answer(at("user_not_admin", lang), show_alert=True)
-        return
+    old_role = await get_user_role(telegram_id)
 
-    await remove_admin_role(telegram_id)
+    await set_user_role(
+        telegram_id=telegram_id,
+        role=new_role,
+        full_name=None
+    )
 
     await log_admin_action(
         admin_id=callback.from_user.id,
-        action="admin_removed_from_bot",
+        action="staff_role_changed_from_bot",
         entity_type="user",
         entity_id=telegram_id,
         details={
-            "removed_admin_id": telegram_id
+            "target_user_id": telegram_id,
+            "old_role": old_role,
+            "new_role": new_role,
         },
     )
 
-    removed_admin_lang = await user_lang(telegram_id)
-
     try:
+        target_lang = await user_lang(telegram_id)
+
         await callback.bot.send_message(
             chat_id=telegram_id,
-            text=at("admin_removed_message", removed_admin_lang),
+            text=at("role_notify", target_lang, role=h(new_role)),
             parse_mode="HTML"
         )
     except Exception:
         pass
 
     await callback.message.edit_text(
-        at("admin_removed", lang, telegram_id=telegram_id),
+        at("role_set_done", lang, telegram_id=telegram_id, role=h(new_role)),
         parse_mode="HTML"
     )
 
 
+@admin_router.callback_query(F.data == "staff_manual_role")
+async def start_manual_staff_role(callback: types.CallbackQuery, state: FSMContext):
+    lang = await user_lang(callback.from_user.id)
+
+    if not await require_superadmin_callback(callback):
+        return
+
+    await callback.message.edit_text(
+        at("manual_id_request", lang),
+        parse_mode="HTML"
+    )
+
+    await state.set_state(StaffManualRoleState.telegram_id)
+
+
+@admin_router.message(StaffManualRoleState.telegram_id)
+async def process_manual_staff_id(message: types.Message, state: FSMContext):
+    lang = await user_lang(message.from_user.id)
+
+    if not await require_superadmin_message(message, state):
+        return
+
+    if not message.text.isdigit():
+        await message.answer(at("send_digits_only", lang))
+        return
+
+    await state.update_data(telegram_id=int(message.text))
+
+    await message.answer(at("manual_name_request", lang))
+
+    await state.set_state(StaffManualRoleState.full_name)
+
+
+@admin_router.message(StaffManualRoleState.full_name)
+async def process_manual_staff_name(message: types.Message, state: FSMContext):
+    lang = await user_lang(message.from_user.id)
+
+    if not await require_superadmin_message(message, state):
+        return
+
+    full_name = message.text.strip()
+
+    if full_name == "-":
+        full_name = None
+
+    await state.update_data(full_name=full_name)
+
+    builder = InlineKeyboardBuilder()
+
+    builder.button(
+        text=at("role_admin", lang),
+        callback_data=StaffManualRoleCB(role="admin")
+    )
+    builder.button(
+        text=at("role_accountant", lang),
+        callback_data=StaffManualRoleCB(role="accountant")
+    )
+    builder.button(
+        text=at("role_superadmin", lang),
+        callback_data=StaffManualRoleCB(role="superadmin")
+    )
+    builder.button(
+        text=at("role_user", lang),
+        callback_data=StaffManualRoleCB(role="user")
+    )
+
+    builder.adjust(1)
+
+    await message.answer(
+        "Qaysi role beramiz?",
+        reply_markup=builder.as_markup()
+    )
+
+    await state.set_state(StaffManualRoleState.role)
+
+
+@admin_router.callback_query(StaffManualRoleState.role, StaffManualRoleCB.filter())
+async def process_manual_staff_role(
+    callback: types.CallbackQuery,
+    callback_data: StaffManualRoleCB,
+    state: FSMContext
+):
+    lang = await user_lang(callback.from_user.id)
+
+    if not await require_superadmin_callback(callback):
+        await state.clear()
+        return
+
+    data = await state.get_data()
+
+    telegram_id = data["telegram_id"]
+    full_name = data.get("full_name")
+    new_role = callback_data.role
+
+    if telegram_id == callback.from_user.id and new_role != "superadmin":
+        await callback.answer(at("cannot_change_self", lang), show_alert=True)
+        return
+
+    old_role = await get_user_role(telegram_id)
+
+    await set_user_role(
+        telegram_id=telegram_id,
+        role=new_role,
+        full_name=full_name
+    )
+
+    await log_admin_action(
+        admin_id=callback.from_user.id,
+        action="staff_role_changed_manual_from_bot",
+        entity_type="user",
+        entity_id=telegram_id,
+        details={
+            "target_user_id": telegram_id,
+            "full_name": full_name,
+            "old_role": old_role,
+            "new_role": new_role,
+        },
+    )
+
+    try:
+        target_lang = await user_lang(telegram_id)
+
+        await callback.bot.send_message(
+            chat_id=telegram_id,
+            text=at("role_notify", target_lang, role=h(new_role)),
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
+
+    await callback.message.edit_text(
+        at("role_set_done", lang, telegram_id=telegram_id, role=h(new_role)),
+        parse_mode="HTML"
+    )
+
+    await state.clear()
+
+
 # ==========================================
-# 12. ADMIN ACTIONS
+# ADMIN / STAFF ACTIONS PAGINATED
 # Superadmin only
 # ==========================================
 
+def format_action_button_text(item):
+    created_at = item["created_at"].strftime("%d.%m %H:%M") if item["created_at"] else "-"
+    admin_name = item["admin_name"] or "Noma'lum"
+    action = item["action"] or "-"
+
+    return f"#{item['id']} | {created_at} | {admin_name[:12]} | {action[:22]}"
+
+
+async def render_actions_page(target, user_id: int, page: int = 1, edit: bool = True):
+    lang = await user_lang(user_id)
+
+    limit = 10
+    page = max(page, 1)
+    offset = (page - 1) * limit
+
+    actions = await get_api_superadmin_admin_actions(limit=limit, offset=offset)
+
+    if not actions:
+        text = at("no_admin_actions", lang)
+
+        if edit:
+            await target.message.edit_text(text)
+        else:
+            await target.answer(text)
+        return
+
+    text = at("actions_list_title", lang, page=page)
+
+    builder = InlineKeyboardBuilder()
+
+    for item in actions:
+        builder.button(
+            text=format_action_button_text(item),
+            callback_data=f"staff_action_detail_{item['id']}_{page}"
+        )
+
+    if page > 1:
+        builder.button(
+            text=at("prev", lang),
+            callback_data=f"staff_actions_page_{page - 1}"
+        )
+
+    if len(actions) == limit:
+        builder.button(
+            text=at("next", lang),
+            callback_data=f"staff_actions_page_{page + 1}"
+        )
+
+    builder.adjust(1)
+
+    if edit:
+        await target.message.edit_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=builder.as_markup()
+        )
+    else:
+        await target.answer(
+            text,
+            parse_mode="HTML",
+            reply_markup=builder.as_markup()
+        )
+
+
+@admin_router.callback_query(F.data == "staff_actions")
+async def show_staff_actions_callback(callback: types.CallbackQuery):
+    if not await require_superadmin_callback(callback):
+        return
+
+    await render_actions_page(callback, callback.from_user.id, page=1, edit=True)
+
+
+@admin_router.callback_query(F.data.startswith("staff_actions_page_"))
+async def show_staff_actions_page(callback: types.CallbackQuery):
+    if not await require_superadmin_callback(callback):
+        return
+
+    page = int(callback.data.split("_")[-1])
+
+    await render_actions_page(callback, callback.from_user.id, page=page, edit=True)
+
+
+@admin_router.callback_query(F.data.startswith("staff_action_detail_"))
+async def show_staff_action_detail(callback: types.CallbackQuery):
+    lang = await user_lang(callback.from_user.id)
+
+    if not await require_superadmin_callback(callback):
+        return
+
+    parts = callback.data.split("_")
+    action_id = int(parts[3])
+    page = int(parts[4]) if len(parts) > 4 else 1
+
+    item = await get_admin_action_detail(action_id)
+
+    if not item:
+        await callback.answer(at("action_not_found", lang), show_alert=True)
+        return
+
+    created_at = item["created_at"].strftime("%d.%m.%Y %H:%M:%S") if item["created_at"] else "-"
+
+    details = item["details"] or {}
+
+    try:
+        details_text = json.dumps(details, ensure_ascii=False, indent=2)
+    except Exception:
+        details_text = str(details)
+
+    if len(details_text) > 1200:
+        details_text = details_text[:1200] + "\n..."
+
+    text = (
+        f"{at('action_detail_title', lang)}\n\n"
+        f"🆔 Action ID: <code>{item['id']}</code>\n"
+        f"👤 Admin: <b>{h(item['admin_name'])}</b>\n"
+        f"🔐 Admin ID: <code>{item['admin_id']}</code>\n"
+        f"🏷 Role: <b>{h(item['admin_role'])}</b>\n"
+        f"⚙️ Action: <code>{h(item['action'])}</code>\n"
+        f"📦 Entity: {h(item['entity_type'])} / {h(item['entity_id'])}\n"
+        f"🕒 Vaqt: {created_at}\n\n"
+        f"📄 Details:\n<pre>{h(details_text)}</pre>"
+    )
+
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text=at("back_to_actions", lang),
+        callback_data=f"staff_actions_page_{page}"
+    )
+    builder.adjust(1)
+
+    await callback.message.edit_text(
+        text[:3900],
+        parse_mode="HTML",
+        reply_markup=builder.as_markup()
+    )
+
+
 @admin_router.message(F.text.in_(all_texts("admin_actions")))
 async def show_admin_actions(message: types.Message):
-    lang = await user_lang(message.from_user.id)
-
     if not await require_superadmin_message(message):
         return
 
-    actions = await get_api_superadmin_admin_actions(limit=30, offset=0)
-
-    if not actions:
-        await message.answer(at("no_admin_actions", lang))
-        return
-
-    text = at("admin_actions_title", lang)
-
-    for item in actions:
-        admin_name = item["admin_name"] or "Noma'lum admin"
-        created_at = item["created_at"].strftime("%d.%m.%Y %H:%M") if item["created_at"] else "-"
-
-        text += (
-            f"🆔 <b>Action ID:</b> {item['id']}\n"
-            f"👤 <b>Admin:</b> {h(admin_name)}\n"
-            f"🔐 <b>Admin ID:</b> <code>{item['admin_id']}</code>\n"
-            f"⚙️ <b>Action:</b> <code>{h(item['action'])}</code>\n"
-            f"📦 <b>Entity:</b> {h(item['entity_type'])} / {h(item['entity_id'])}\n"
-            f"🕒 <b>Vaqt:</b> {created_at}\n\n"
-        )
-
-    await message.answer(text[:3900], parse_mode="HTML")
+    await render_actions_page(message, message.from_user.id, page=1, edit=False)
 
 
 # ==========================================
-# 13. TEACHERS VIEW BY LANGUAGE
+# 10. TEACHERS VIEW BY LANGUAGE
 # Admin + Superadmin
 # ==========================================
 
@@ -1702,7 +1891,7 @@ async def show_teacher_groups(callback: types.CallbackQuery):
 
 
 # ==========================================
-# 14. GROUP STUDENTS VIEW COMPACT
+# 11. GROUP STUDENTS VIEW COMPACT
 # Admin + Superadmin
 # ==========================================
 
@@ -1783,7 +1972,7 @@ async def show_student_profile(callback: types.CallbackQuery):
 
 
 # ==========================================
-# 15. STUDENT RESULTS VIEW
+# 12. STUDENT RESULTS VIEW
 # Admin + Superadmin
 # ==========================================
 
@@ -1816,7 +2005,7 @@ async def show_student_results(callback: types.CallbackQuery):
 
 
 # ==========================================
-# 16. OLD STUDENTS BUTTON FALLBACK
+# 13. OLD STUDENTS BUTTON FALLBACK
 # Admin + Superadmin
 # ==========================================
 
@@ -1828,7 +2017,7 @@ async def show_students_overview_removed(message: types.Message):
 
 
 # ==========================================
-# 17. ALL RESULTS VIEW
+# 14. ALL RESULTS VIEW
 # Admin + Superadmin
 # ==========================================
 

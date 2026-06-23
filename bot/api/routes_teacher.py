@@ -2,8 +2,10 @@
 import os
 import uuid
 from pathlib import Path
+from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from pydantic import BaseModel
 
 from api.security import require_roles
 from database.db import (
@@ -23,11 +25,29 @@ from database.db import (
 
 router = APIRouter(prefix="/api/teacher", tags=["Teacher"])
 
+BASE_DIR = Path(__file__).resolve().parent.parent
+LESSONS_DIR = BASE_DIR / "media" / "lessons"
+
+MAX_LESSON_FILE_SIZE_MB = int(os.getenv("MAX_LESSON_FILE_SIZE_MB", "200"))
+MAX_LESSON_FILE_SIZE_BYTES = MAX_LESSON_FILE_SIZE_MB * 1024 * 1024
+
 ALLOWED_EXTENSIONS = {
     ".mp4", ".mov", ".mkv", ".webm",
     ".pdf", ".doc", ".docx", ".ppt", ".pptx",
     ".jpg", ".jpeg", ".png", ".webp"
 }
+
+
+class CreateResultPayload(BaseModel):
+    student_id: int
+    result_title: str
+    score: str
+    comment: Optional[str] = ""
+
+
+class CreateKickRequestPayload(BaseModel):
+    student_id: int
+    reason: str
 
 
 def detect_material_type(filename: str, content_type: str | None = None) -> str:
@@ -48,15 +68,82 @@ def detect_material_type(filename: str, content_type: str | None = None) -> str:
     return "document"
 
 
+def validate_upload_file(original_filename: str):
+    ext = Path(original_filename).suffix.lower()
+
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail="Bu fayl turi ruxsat etilmagan."
+        )
+
+    return ext
+
+
+def make_material_url(request: Request, material_path: str | None):
+    if not material_path:
+        return None
+
+    normalized = str(material_path).replace("\\", "/")
+    base_url = str(request.base_url).rstrip("/")
+
+    if normalized.startswith("media/lessons/"):
+        return f"{base_url}/{normalized}"
+
+    if "/media/lessons/" in normalized:
+        relative = normalized.split("/media/lessons/", 1)[1]
+        return f"{base_url}/media/lessons/{relative}"
+
+    return None
+
+
+async def save_upload_file(file: UploadFile, local_path: Path) -> int:
+    file_size = 0
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with open(local_path, "wb") as output:
+            while True:
+                chunk = await file.read(1024 * 1024)
+
+                if not chunk:
+                    break
+
+                file_size += len(chunk)
+
+                if file_size > MAX_LESSON_FILE_SIZE_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Fayl juda katta. Maksimum: {MAX_LESSON_FILE_SIZE_MB} MB."
+                    )
+
+                output.write(chunk)
+
+    except HTTPException:
+        if local_path.exists():
+            local_path.unlink(missing_ok=True)
+        raise
+
+    except Exception:
+        if local_path.exists():
+            local_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Faylni saqlashda xatolik yuz berdi."
+        )
+
+    return file_size
+
+
 @router.get("/groups")
 async def teacher_groups(
     current_user: dict = Depends(require_roles("teacher"))
 ):
     teacher_id = current_user["telegram_id"]
-
     groups = await get_api_teacher_groups(teacher_id)
 
     return {
+        "ok": True,
         "teacher_id": teacher_id,
         "groups": [dict(group) for group in groups]
     }
@@ -70,11 +157,15 @@ async def teacher_group_students(
     teacher_id = current_user["telegram_id"]
 
     if not await teacher_owns_group(teacher_id, group_id):
-        raise HTTPException(status_code=403, detail="Siz bu guruhni boshqara olmaysiz.")
+        raise HTTPException(
+            status_code=403,
+            detail="Siz bu guruhni boshqara olmaysiz."
+        )
 
     students = await get_teacher_group_students(teacher_id, group_id)
 
     return {
+        "ok": True,
         "teacher_id": teacher_id,
         "group_id": group_id,
         "students": [dict(student) for student in students]
@@ -90,25 +181,22 @@ async def teacher_group_lessons(
     teacher_id = current_user["telegram_id"]
 
     if not await teacher_owns_group(teacher_id, group_id):
-        raise HTTPException(status_code=403, detail="Siz bu guruhni boshqara olmaysiz.")
+        raise HTTPException(
+            status_code=403,
+            detail="Siz bu guruhni boshqara olmaysiz."
+        )
 
     lessons = await get_api_teacher_group_lessons(teacher_id, group_id)
 
     result = []
-    base_url = str(request.base_url).rstrip("/")
 
     for lesson in lessons:
         item = dict(lesson)
-
-        material_path = item.get("video_path")
-        if material_path and material_path.startswith("media/lessons/"):
-            item["material_url"] = base_url + "/" + material_path.replace("\\", "/")
-        else:
-            item["material_url"] = None
-
+        item["material_url"] = make_material_url(request, item.get("video_path"))
         result.append(item)
 
     return {
+        "ok": True,
         "teacher_id": teacher_id,
         "group_id": group_id,
         "lessons": result
@@ -118,6 +206,7 @@ async def teacher_group_lessons(
 @router.post("/groups/{group_id}/lessons")
 async def upload_teacher_lesson(
     group_id: int,
+    request: Request,
     title: str = Form(...),
     file: UploadFile = File(...),
     current_user: dict = Depends(require_roles("teacher"))
@@ -125,40 +214,34 @@ async def upload_teacher_lesson(
     teacher_id = current_user["telegram_id"]
 
     if not await teacher_owns_group(teacher_id, group_id):
-        raise HTTPException(status_code=403, detail="Siz bu guruhga dars yuklay olmaysiz.")
-
-    original_filename = file.filename or "lesson_file"
-    ext = Path(original_filename).suffix.lower()
-
-    if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
-            status_code=400,
-            detail="Bu fayl turi ruxsat etilmagan."
+            status_code=403,
+            detail="Siz bu guruhga dars yuklay olmaysiz."
         )
 
-    folder_path = Path(f"media/lessons/group_{group_id}")
-    folder_path.mkdir(parents=True, exist_ok=True)
+    clean_title = title.strip()
 
-    unique_name = f"lesson_{uuid.uuid4().hex}{ext}"
-    local_path = folder_path / unique_name
+    if not clean_title:
+        raise HTTPException(
+            status_code=400,
+            detail="Dars nomi bo'sh bo'lmasligi kerak."
+        )
 
-    file_size = 0
-
-    with open(local_path, "wb") as output:
-        while True:
-            chunk = await file.read(1024 * 1024)
-            if not chunk:
-                break
-
-            file_size += len(chunk)
-            output.write(chunk)
+    original_filename = file.filename or "lesson_file"
+    ext = validate_upload_file(original_filename)
 
     material_type = detect_material_type(original_filename, file.content_type)
 
+    unique_name = f"lesson_{uuid.uuid4().hex}{ext}"
+    relative_path = f"media/lessons/group_{group_id}/{unique_name}"
+    local_path = BASE_DIR / relative_path
+
+    file_size = await save_upload_file(file, local_path)
+
     lesson_id = await add_lesson(
         group_id=group_id,
-        title=title,
-        material_path=str(local_path).replace("\\", "/"),
+        title=clean_title,
+        material_path=relative_path,
         material_type=material_type,
         original_filename=original_filename,
         file_size=file_size
@@ -168,11 +251,12 @@ async def upload_teacher_lesson(
         "ok": True,
         "lesson_id": lesson_id,
         "group_id": group_id,
-        "title": title,
+        "title": clean_title,
         "material_type": material_type,
         "original_filename": original_filename,
         "file_size": file_size,
-        "path": str(local_path).replace("\\", "/")
+        "path": relative_path,
+        "material_url": make_material_url(request, relative_path)
     }
 
 
@@ -181,10 +265,10 @@ async def teacher_results(
     current_user: dict = Depends(require_roles("teacher"))
 ):
     teacher_id = current_user["telegram_id"]
-
     results = await get_api_teacher_results(teacher_id)
 
     return {
+        "ok": True,
         "teacher_id": teacher_id,
         "results": [dict(result) for result in results]
     }
@@ -193,22 +277,47 @@ async def teacher_results(
 @router.post("/groups/{group_id}/results")
 async def create_teacher_result(
     group_id: int,
-    student_id: int = Form(...),
-    result_title: str = Form(...),
-    score: str = Form(...),
-    comment: str = Form(""),
+    payload: CreateResultPayload,
     current_user: dict = Depends(require_roles("teacher"))
 ):
     teacher_id = current_user["telegram_id"]
 
     if not await teacher_owns_group(teacher_id, group_id):
-        raise HTTPException(status_code=403, detail="Siz bu guruhga natija kirita olmaysiz.")
+        raise HTTPException(
+            status_code=403,
+            detail="Siz bu guruhga natija kirita olmaysiz."
+        )
 
-    if not await api_student_is_in_teacher_group(teacher_id, group_id, student_id):
-        raise HTTPException(status_code=403, detail="Bu o'quvchi sizning guruhingizda emas.")
+    if payload.student_id <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Student ID noto'g'ri."
+        )
+
+    result_title = payload.result_title.strip()
+    score = payload.score.strip()
+    comment = (payload.comment or "").strip()
+
+    if not result_title:
+        raise HTTPException(
+            status_code=400,
+            detail="Natija nomi bo'sh bo'lmasligi kerak."
+        )
+
+    if not score:
+        raise HTTPException(
+            status_code=400,
+            detail="Ball/natija bo'sh bo'lmasligi kerak."
+        )
+
+    if not await api_student_is_in_teacher_group(teacher_id, group_id, payload.student_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Bu o'quvchi sizning guruhingizda emas."
+        )
 
     result_id = await add_student_result(
-        user_id=student_id,
+        user_id=payload.student_id,
         group_id=group_id,
         teacher_id=teacher_id,
         result_title=result_title,
@@ -216,7 +325,7 @@ async def create_teacher_result(
         comment=comment
     )
 
-    student = await get_full_profile(student_id)
+    student = await get_full_profile(payload.student_id)
     group = await get_group_info(group_id)
 
     return {
@@ -235,10 +344,10 @@ async def teacher_kick_requests(
     current_user: dict = Depends(require_roles("teacher"))
 ):
     teacher_id = current_user["telegram_id"]
-
     requests = await get_api_teacher_kick_requests(teacher_id)
 
     return {
+        "ok": True,
         "teacher_id": teacher_id,
         "kick_requests": [dict(item) for item in requests]
     }
@@ -247,26 +356,45 @@ async def teacher_kick_requests(
 @router.post("/groups/{group_id}/kick-requests")
 async def create_teacher_kick_request(
     group_id: int,
-    student_id: int = Form(...),
-    reason: str = Form(...),
+    payload: CreateKickRequestPayload,
     current_user: dict = Depends(require_roles("teacher"))
 ):
     teacher_id = current_user["telegram_id"]
 
     if not await teacher_owns_group(teacher_id, group_id):
-        raise HTTPException(status_code=403, detail="Siz bu guruh bo'yicha so'rov yubora olmaysiz.")
+        raise HTTPException(
+            status_code=403,
+            detail="Siz bu guruh bo'yicha so'rov yubora olmaysiz."
+        )
 
-    if not await api_student_is_in_teacher_group(teacher_id, group_id, student_id):
-        raise HTTPException(status_code=403, detail="Bu o'quvchi sizning guruhingizda emas.")
+    if payload.student_id <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Student ID noto'g'ri."
+        )
+
+    reason = payload.reason.strip()
+
+    if not reason:
+        raise HTTPException(
+            status_code=400,
+            detail="Chetlatish sababi bo'sh bo'lmasligi kerak."
+        )
+
+    if not await api_student_is_in_teacher_group(teacher_id, group_id, payload.student_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Bu o'quvchi sizning guruhingizda emas."
+        )
 
     request_id = await add_kick_request(
-        user_id=student_id,
+        user_id=payload.student_id,
         group_id=group_id,
         teacher_id=teacher_id,
         reason=reason
     )
 
-    student = await get_full_profile(student_id)
+    student = await get_full_profile(payload.student_id)
     group = await get_group_info(group_id)
 
     return {

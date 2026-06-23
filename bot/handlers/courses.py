@@ -9,7 +9,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from database.db import (
     add_payment,
     get_user,
-    get_payment_admin_ids,
+    get_accounting_staff_ids,
     get_user_interface_lang,
 )
 from utils.states import (
@@ -18,6 +18,7 @@ from utils.states import (
     PackCB,
     AdminApproveCB,
     AdminRejectCB,
+    AccountingPaymentCB,
 )
 from utils.data import LANGUAGES, PACKAGES
 from utils.i18n import all_texts
@@ -71,14 +72,14 @@ LOCAL_TEXTS = {
         "en": "💳 <b>Card payment</b>\n\nCard number: <code>8600 1234 5678 9012</code>\nRecipient: Visa & Language Consulting\n\nAfter payment, please send <b>a receipt photo, screenshot, or PDF file</b> here:",
     },
     "cash_payment_info": {
-        "uz": "🏢 <b>Ofisimiz manzili:</b> Sirdaryo viloyati, Guliston shahri, IT Park binosi.\n\nKelib to'lovni amalga oshirganingizdan so'ng, adminimiz tizimda tasdiqlaydi va siz guruhga qo'shilasiz.",
-        "ru": "🏢 <b>Адрес офиса:</b> Сырдарьинская область, город Гулистан, здание IT Park.\n\nПосле оплаты в офисе администратор подтвердит оплату в системе, и вы будете добавлены в группу.",
-        "en": "🏢 <b>Office address:</b> Sirdaryo region, Gulistan city, IT Park building.\n\nAfter you make the payment at the office, our admin will confirm it in the system and you will be added to the group.",
+        "uz": "🏢 <b>Ofisimiz manzili:</b> Sirdaryo viloyati, Guliston shahri, IT Park binosi.\n\nKelib to'lovni amalga oshirganingizdan so'ng, accounting/admin tizimda tasdiqlaydi va siz guruhga qo'shilasiz.",
+        "ru": "🏢 <b>Адрес офиса:</b> Сырдарьинская область, город Гулистан, здание IT Park.\n\nПосле оплаты в офисе бухгалтерия/администратор подтвердит оплату в системе, и вы будете добавлены в группу.",
+        "en": "🏢 <b>Office address:</b> Sirdaryo region, Gulistan city, IT Park building.\n\nAfter you make the payment at the office, accounting/admin will confirm it in the system and you will be added to the group.",
     },
     "receipt_accepted": {
-        "uz": "✅ <b>Chek qabul qilindi va bazaga saqlandi!</b>\n\nAdminlarimiz to'lovni tekshirib, tez orada sizga guruh havolasini yuborishadi. Iltimos, kuting.",
-        "ru": "✅ <b>Чек принят и сохранён в базе!</b>\n\nАдминистраторы проверят оплату и скоро отправят вам ссылку на группу. Пожалуйста, ожидайте.",
-        "en": "✅ <b>Your receipt has been received and saved!</b>\n\nOur admins will check the payment and send you the group link soon. Please wait.",
+        "uz": "✅ <b>Chek qabul qilindi va bazaga saqlandi!</b>\n\nAccounting/admin to'lovni tekshirib, tez orada sizga guruh havolasini yuboradi. Iltimos, kuting.",
+        "ru": "✅ <b>Чек принят и сохранён в базе!</b>\n\nБухгалтерия/администратор проверит оплату и скоро отправит вам ссылку на группу. Пожалуйста, ожидайте.",
+        "en": "✅ <b>Your receipt has been received and saved!</b>\n\nAccounting/admin will check the payment and send you the group link soon. Please wait.",
     },
 }
 
@@ -161,19 +162,30 @@ def languages_keyboard():
     return builder.as_markup()
 
 
-def admin_payment_keyboard(payment_id: int):
-    admin_builder = InlineKeyboardBuilder()
-    admin_builder.button(
+def payment_notification_keyboard(payment_id: int):
+    """
+    Notification ichidagi tugmalar.
+
+    🔎 Ko'rish / Detail — keyingi stepda accounting.py ushlaydi.
+    ✅ / ❌ — hozirgi eski admin.py approve/reject flow bilan compatibility uchun qoldi.
+    """
+    builder = InlineKeyboardBuilder()
+
+    builder.button(
+        text="🔎 Ko‘rish / Detail",
+        callback_data=AccountingPaymentCB(payment_id=payment_id, action="detail")
+    )
+    builder.button(
         text="✅ Tasdiqlash",
         callback_data=AdminApproveCB(payment_id=payment_id)
     )
-    admin_builder.button(
+    builder.button(
         text="❌ Rad etish",
         callback_data=AdminRejectCB(payment_id=payment_id)
     )
-    admin_builder.adjust(2)
 
-    return admin_builder.as_markup()
+    builder.adjust(1, 2)
+    return builder.as_markup()
 
 
 # ==========================================
@@ -312,24 +324,25 @@ async def pay_cash(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
     )
     user_data = await get_user(callback.from_user.id)
 
-    admin_ids = await get_payment_admin_ids()
+    staff_ids = await get_accounting_staff_ids()
 
-    if admin_ids:
+    if staff_ids:
         admin_text = (
             f"💵 <b>Yangi NAQD to'lov so'rovi!</b>\n\n"
-            f"🆔 ID: {payment_id}\n"
+            f"🆔 Payment ID: <code>{payment_id}</code>\n"
             f"👤 O'quvchi: {user_data['full_name']}\n"
             f"📞 Telefon: {user_data['phone']}\n"
-            f"📚 Kurs: {course_info}"
+            f"📚 Kurs: {course_info}\n\n"
+            f"📌 Status: <b>pending</b>"
         )
 
-        for admin_id in admin_ids:
+        for staff_id in staff_ids:
             try:
                 await bot.send_message(
-                    chat_id=admin_id,
+                    chat_id=staff_id,
                     text=admin_text,
                     parse_mode="HTML",
-                    reply_markup=admin_payment_keyboard(payment_id)
+                    reply_markup=payment_notification_keyboard(payment_id)
                 )
             except Exception:
                 pass
@@ -355,12 +368,19 @@ async def process_receipt(message: types.Message, state: FSMContext, bot: Bot):
 
     os.makedirs("media/receipts", exist_ok=True)
 
+    receipt_type = "photo"
+    original_filename = None
+
     if message.photo:
         file_id = message.photo[-1].file_id
         ext = ".jpg"
+        receipt_type = "photo"
+        original_filename = "receipt.jpg"
     else:
         file_id = message.document.file_id
-        ext = f".{message.document.file_name.split('.')[-1]}"
+        original_filename = message.document.file_name or "receipt_file"
+        ext = os.path.splitext(original_filename)[1] or ".bin"
+        receipt_type = "document"
 
     file = await bot.get_file(file_id)
     file_path = f"media/receipts/{message.from_user.id}_{file_id[:10]}{ext}"
@@ -375,26 +395,39 @@ async def process_receipt(message: types.Message, state: FSMContext, bot: Bot):
     )
     user_data = await get_user(message.from_user.id)
 
-    admin_ids = await get_payment_admin_ids()
+    staff_ids = await get_accounting_staff_ids()
 
-    if admin_ids:
+    if staff_ids:
         admin_text = (
             f"💳 <b>Karta orqali yangi to'lov!</b>\n\n"
-            f"🆔 So'rov ID: {payment_id}\n"
+            f"🆔 Payment ID: <code>{payment_id}</code>\n"
             f"👤 O'quvchi: {user_data['full_name']}\n"
             f"📞 Telefon: {user_data['phone']}\n"
-            f"📚 Kurs: {course_info}"
+            f"📚 Kurs: {course_info}\n"
+            f"📎 Fayl: {original_filename}\n\n"
+            f"📌 Status: <b>pending</b>"
         )
 
-        for admin_id in admin_ids:
+        receipt_file = FSInputFile(file_path, filename=original_filename)
+
+        for staff_id in staff_ids:
             try:
-                await bot.send_photo(
-                    chat_id=admin_id,
-                    photo=FSInputFile(file_path),
-                    caption=admin_text,
-                    parse_mode="HTML",
-                    reply_markup=admin_payment_keyboard(payment_id)
-                )
+                if receipt_type == "photo":
+                    await bot.send_photo(
+                        chat_id=staff_id,
+                        photo=receipt_file,
+                        caption=admin_text,
+                        parse_mode="HTML",
+                        reply_markup=payment_notification_keyboard(payment_id)
+                    )
+                else:
+                    await bot.send_document(
+                        chat_id=staff_id,
+                        document=receipt_file,
+                        caption=admin_text,
+                        parse_mode="HTML",
+                        reply_markup=payment_notification_keyboard(payment_id)
+                    )
             except Exception:
                 pass
 

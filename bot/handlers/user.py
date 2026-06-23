@@ -13,7 +13,7 @@ from database.db import (
     get_user_role,
     save_teacher_application,
     get_full_profile,
-    get_payment_admin_ids,
+    get_management_staff_ids,
     get_user_interface_lang,
     set_user_interface_lang,
 )
@@ -311,6 +311,23 @@ def admin_main_menu(lang: str = "uz"):
         resize_keyboard=True
     )
 
+def accountant_main_menu(lang: str = "uz"):
+    """Accountant menyusi: faqat to'lovlar bilan ishlaydi"""
+    keyboard = []
+
+    mini_row = mini_app_button_row(lang)
+    if mini_row:
+        keyboard.append(mini_row)
+
+    keyboard += [
+        [types.KeyboardButton(text=t("accounting_panel", lang))],
+        [types.KeyboardButton(text=t("profile", lang))]
+    ]
+
+    return types.ReplyKeyboardMarkup(
+        keyboard=keyboard,
+        resize_keyboard=True
+    )
 
 def superadmin_main_menu(lang: str = "uz"):
     """
@@ -423,6 +440,13 @@ async def show_role_menu(message: types.Message, user_id: int, full_name: str, s
         await message.answer(
             t("superadmin_welcome", lang),
             reply_markup=superadmin_main_menu(lang)
+        )
+        return
+
+    elif role == "accountant":
+        await message.answer(
+            t("accountant_welcome", lang),
+            reply_markup=accountant_main_menu(lang)
         )
         return
 
@@ -641,7 +665,7 @@ async def t_confirm_registration(message: types.Message, state: FSMContext, bot:
         data["cv_content"]
     )
 
-    admin_ids = await get_payment_admin_ids()
+    admin_ids = await get_management_staff_ids()
 
     if admin_ids:
         from utils.states import AdminTeacherApproveCB, AdminTeacherRejectCB
@@ -987,6 +1011,13 @@ async def show_profile(message: types.Message):
 
     elif role == "admin":
         status_text = "👨‍💻 Admin"
+
+    elif role == "accountant":
+        status_text = {
+            "uz": "💰 Accountant",
+            "ru": "💰 Бухгалтерия",
+            "en": "💰 Accountant",
+        }.get(lang, "💰 Accountant")
 
     elif role == "superadmin":
         status_text = "👑 Superadmin"

@@ -1,8 +1,10 @@
+// frontend-miniapp/src/App.jsx
 import { useEffect, useMemo, useState } from "react";
 import "./App.css";
 
 import { useTelegram } from "./hooks/useTelegram";
 import { createApiClient } from "./services/api";
+import { t } from "./i18n";
 
 import Layout from "./components/Layout";
 import Loading from "./components/Loading";
@@ -11,7 +13,8 @@ import ErrorBox from "./components/ErrorBox";
 import StudentDashboard from "./pages/student/StudentDashboard";
 import TeacherDashboard from "./pages/teacher/TeacherDashboard";
 import AdminDashboard from "./pages/admin/AdminDashboard";
-import SuperAdminDashboard from "./pages/superadmin/SuperAdminDashboard";
+import AccountantDashboard from "./pages/accountant/AccountantDashboard";
+import SuperAdminPortal from "./pages/superadmin/SuperAdminPortal";
 
 function App() {
   const { initTelegram, initData } = useTelegram();
@@ -22,60 +25,104 @@ function App() {
 
   const api = useMemo(() => createApiClient(initData), [initData]);
 
+const profile = me?.profile || null;
+const role = me?.role || "user";
+const lang = profile?.interface_lang || "uz";
+
   useEffect(() => {
     initTelegram();
-    loadMe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function loadMe() {
-    try {
-      setLoading(true);
-      setError("");
+  useEffect(() => {
+    let isMounted = true;
 
-      const res = await api.get("/api/me");
-      setMe(res.data);
-    } catch (err) {
-      setError(
-        err.response?.data?.detail ||
-          "Mini App ma'lumotlarini yuklab bo'lmadi."
-      );
-    } finally {
-      setLoading(false);
+    async function loadMe() {
+      try {
+        setLoading(true);
+        setError("");
+
+        const res = await api.get("/api/me");
+
+        if (isMounted) {
+          setMe(res.data);
+        }
+      } catch (err) {
+        if (isMounted) {
+          setError(
+            err.friendlyMessage ||
+              err.response?.data?.detail ||
+              t("loadMiniAppFailed", "uz")
+          );
+        }
+      } finally {
+        if (isMounted) {
+          setLoading(false);
+        }
+      }
     }
-  }
 
-  if (loading) return <Loading />;
+    loadMe();
 
-  if (error) return <ErrorBox message={error} />;
+    return () => {
+      isMounted = false;
+    };
+  }, [api]);
 
-  const profile = me?.profile;
-  const role = me?.role;
+if (loading) {
+  return <Loading lang={lang} />;
+}
+
+if (error) {
+  return <ErrorBox message={error} lang={lang} />;
+}
 
   if (!profile) {
-    return <ErrorBox message="Profil topilmadi." />;
+    return <ErrorBox message={t("profileNotFound", lang)} lang={lang} />;
   }
 
-  let title = "Kabinet";
+  let title = t("cabinet", lang);
 
-  if (role === "student") title = "O‘quvchi kabineti";
-  if (role === "teacher") title = "Ustoz kabineti";
-  if (role === "admin") title = "Admin kabineti";
-  if (role === "superadmin") title = "Superadmin kabineti";
+  if (role === "student") title = t("studentCabinet", lang);
+  if (role === "teacher") title = t("teacherCabinet", lang);
+  if (role === "admin") title = t("adminCabinet", lang);
+  if (role === "accountant") title = t("accountantCabinet", lang);
+  if (role === "superadmin") title = t("superadminCabinet", lang);
+
+  const activeRoles = [
+    "student",
+    "teacher",
+    "admin",
+    "accountant",
+    "superadmin",
+  ];
 
   return (
     <Layout profile={profile} title={title}>
-      {role === "student" && <StudentDashboard api={api} profile={profile} />}
-      {role === "teacher" && <TeacherDashboard api={api} profile={profile} />}
-      {role === "admin" && <AdminDashboard api={api} profile={profile} />}
-      {role === "superadmin" && <SuperAdminDashboard api={api} profile={profile} />}
+      {role === "student" && (
+        <StudentDashboard api={api} profile={profile} lang={lang} />
+      )}
 
-      {!["student", "teacher", "admin", "superadmin"].includes(role) && (
+      {role === "teacher" && (
+        <TeacherDashboard api={api} profile={profile} lang={lang} />
+      )}
+
+      {role === "admin" && (
+        <AdminDashboard api={api} profile={profile} lang={lang} />
+      )}
+
+      {role === "accountant" && (
+        <AccountantDashboard api={api} profile={profile} lang={lang} />
+      )}
+
+      {role === "superadmin" && (
+        <SuperAdminPortal api={api} profile={profile} lang={lang} />
+      )}
+
+      {!activeRoles.includes(role) && (
         <section className="card">
-          <h2>Profil aktiv emas</h2>
-          <p>
-            Siz hali o‘quvchi, ustoz yoki admin sifatida tasdiqlanmagansiz.
-            Iltimos, Telegram bot orqali ro‘yxatdan o‘ting.
-          </p>
+          <h2>{t("inactiveProfile", lang)}</h2>
+          <p>{t("inactiveProfileText", lang)}</p>
         </section>
       )}
     </Layout>

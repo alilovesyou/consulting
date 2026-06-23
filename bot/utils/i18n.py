@@ -56,9 +56,9 @@ TEXTS = {
     },
 
     "admin_manage": {
-        "uz": "👨‍💻 Adminlarni boshqarish",
-        "ru": "👨‍💻 Управление админами",
-        "en": "👨‍💻 Manage admins",
+        "uz": "👥 Xodimlarni boshqarish",
+        "ru": "👥 Управление сотрудниками",
+        "en": "👥 Staff management",
     },
 
     "teachers_view": {
@@ -119,6 +119,16 @@ TEXTS = {
         "uz": "👑 Assalomu alaykum, Superadmin! Boshqaruv paneliga xush kelibsiz.",
         "ru": "👑 Здравствуйте, Superadmin! Добро пожаловать в панель управления.",
         "en": "👑 Hello, Superadmin! Welcome to the control panel.",
+    },
+    "accountant_welcome": {
+        "uz": "💰 Assalomu alaykum! Accounting panelga xush kelibsiz.",
+        "ru": "💰 Здравствуйте! Добро пожаловать в панель бухгалтерии.",
+        "en": "💰 Hello! Welcome to the accounting panel.",
+    },
+    "accounting_panel": {
+        "uz": "💰 Accounting panel",
+        "ru": "💰 Бухгалтерия",
+        "en": "💰 Accounting",
     },
 }
 

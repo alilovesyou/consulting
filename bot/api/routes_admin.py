@@ -6,32 +6,22 @@ from pydantic import BaseModel
 
 from api.security import require_roles
 from database.db import (
-    add_student_to_group_if_capacity,
     change_group_teacher,
     create_new_group,
     delete_group,
     get_api_admin_groups,
     get_api_admin_kick_requests,
-    get_api_admin_payments,
     get_api_admin_statistics,
     get_api_admin_teachers,
     get_api_teacher_applications,
-    get_group_link,
     get_kick_request,
-    get_payment,
     log_admin_action,
     remove_student_from_group,
     update_kick_request_status,
-    update_payment_status,
     update_teacher_status,
 )
 
-
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
-
-
-class ApprovePaymentPayload(BaseModel):
-    group_id: int
 
 
 class CreateGroupPayload(BaseModel):
@@ -52,8 +42,8 @@ class RejectPayload(BaseModel):
 
 # ==========================================
 # ADMIN + SUPERADMIN
-# Admin ham, Superadmin ham platformani boshqara oladi.
-# Faqat admin qo'shish / adminni olib tashlash routes_superadmin.py da qoladi.
+# Payment approve/reject bu faylda YO'Q.
+# Paymentlar endi /api/accounting orqali ishlaydi.
 # ==========================================
 
 @router.get("/statistics")
@@ -66,113 +56,6 @@ async def admin_statistics(
         "ok": True,
         "admin_id": current_user["telegram_id"],
         "statistics": stats
-    }
-
-
-@router.get("/payments")
-async def admin_payments(
-    status: Optional[str] = Query(default=None),
-    current_user: dict = Depends(require_roles("admin", "superadmin"))
-):
-    allowed_statuses = [None, "pending", "approved", "rejected"]
-
-    if status not in allowed_statuses:
-        raise HTTPException(status_code=400, detail="Payment status noto'g'ri.")
-
-    payments = await get_api_admin_payments(status=status)
-
-    return {
-        "ok": True,
-        "status": status,
-        "payments": [dict(payment) for payment in payments]
-    }
-
-
-@router.post("/payments/{payment_id}/approve")
-async def approve_payment(
-    payment_id: int,
-    payload: ApprovePaymentPayload,
-    current_user: dict = Depends(require_roles("admin", "superadmin"))
-):
-    payment = await get_payment(payment_id)
-
-    if not payment:
-        raise HTTPException(status_code=404, detail="To'lov topilmadi.")
-
-    if payment["status"] != "pending":
-        raise HTTPException(status_code=400, detail="Bu to'lov allaqachon ko'rib chiqilgan.")
-
-    group = await get_group_link(payload.group_id)
-
-    if not group:
-        raise HTTPException(status_code=404, detail="Guruh topilmadi.")
-
-    capacity_result = await add_student_to_group_if_capacity(
-        payment["user_id"],
-        payload.group_id
-    )
-
-    if not capacity_result["ok"]:
-        raise HTTPException(status_code=400, detail=capacity_result["message"])
-
-    await update_payment_status(payment_id, "approved")
-
-    await log_admin_action(
-        admin_id=current_user["telegram_id"],
-        action="payment_approved",
-        entity_type="payment",
-        entity_id=payment_id,
-        details={
-            "student_id": payment["user_id"],
-            "group_id": payload.group_id,
-            "group_name": group["name"],
-            "capacity": capacity_result
-        }
-    )
-
-    return {
-        "ok": True,
-        "payment_id": payment_id,
-        "status": "approved",
-        "student_id": payment["user_id"],
-        "group_id": payload.group_id,
-        "group_name": group["name"],
-        "capacity": capacity_result
-    }
-
-
-@router.post("/payments/{payment_id}/reject")
-async def reject_payment(
-    payment_id: int,
-    payload: RejectPayload = RejectPayload(),
-    current_user: dict = Depends(require_roles("admin", "superadmin"))
-):
-    payment = await get_payment(payment_id)
-
-    if not payment:
-        raise HTTPException(status_code=404, detail="To'lov topilmadi.")
-
-    if payment["status"] != "pending":
-        raise HTTPException(status_code=400, detail="Bu to'lov allaqachon ko'rib chiqilgan.")
-
-    await update_payment_status(payment_id, "rejected")
-
-    await log_admin_action(
-        admin_id=current_user["telegram_id"],
-        action="payment_rejected",
-        entity_type="payment",
-        entity_id=payment_id,
-        details={
-            "student_id": payment["user_id"],
-            "reason": payload.reason
-        }
-    )
-
-    return {
-        "ok": True,
-        "payment_id": payment_id,
-        "status": "rejected",
-        "reason": payload.reason
     }
 
 
@@ -198,36 +81,52 @@ async def create_group(
     payload: CreateGroupPayload,
     current_user: dict = Depends(require_roles("admin", "superadmin"))
 ):
+    if not payload.name.strip():
+        raise HTTPException(status_code=400, detail="Guruh nomi bo'sh bo'lmasligi kerak.")
+
+    if not payload.language.strip():
+        raise HTTPException(status_code=400, detail="Til/fan bo'sh bo'lmasligi kerak.")
+
     if payload.max_capacity <= 0:
         raise HTTPException(status_code=400, detail="Guruh sig'imi 0 dan katta bo'lishi kerak.")
 
-    await create_new_group(
-        name=payload.name,
-        language=payload.language,
+    if not payload.telegram_link.strip():
+        raise HTTPException(status_code=400, detail="Telegram guruh linki bo'sh bo'lmasligi kerak.")
+
+    group_id = await create_new_group(
+        name=payload.name.strip(),
+        language=payload.language.strip(),
         max_capacity=payload.max_capacity,
-        telegram_link=payload.telegram_link,
+        telegram_link=payload.telegram_link.strip(),
         teacher_id=payload.teacher_id
-    )
+    )    
 
     await log_admin_action(
         admin_id=current_user["telegram_id"],
-        action="group_created",
+        action="group_created_from_miniapp",
         entity_type="group",
         entity_id=None,
         details={
-            "name": payload.name,
-            "language": payload.language,
+            "name": payload.name.strip(),
+            "language": payload.language.strip(),
             "max_capacity": payload.max_capacity,
-            "telegram_link": payload.telegram_link,
+            "telegram_link": payload.telegram_link.strip(),
             "teacher_id": payload.teacher_id
         }
     )
 
     return {
-        "ok": True,
-        "message": "Guruh yaratildi.",
-        "group": payload.model_dump()
+    "ok": True,
+    "message": "Guruh yaratildi.",
+    "group": {
+        "id": group_id,
+        "name": payload.name.strip(),
+        "language": payload.language.strip(),
+        "max_capacity": payload.max_capacity,
+        "telegram_link": payload.telegram_link.strip(),
+        "teacher_id": payload.teacher_id
     }
+}
 
 
 @router.patch("/groups/{group_id}/teacher")
@@ -240,7 +139,7 @@ async def change_teacher(
 
     await log_admin_action(
         admin_id=current_user["telegram_id"],
-        action="group_teacher_changed",
+        action="group_teacher_changed_from_miniapp",
         entity_type="group",
         entity_id=group_id,
         details={
@@ -266,7 +165,7 @@ async def remove_group(
 
     await log_admin_action(
         admin_id=current_user["telegram_id"],
-        action="group_deleted",
+        action="group_deleted_from_miniapp",
         entity_type="group",
         entity_id=group_id,
         details={
@@ -326,7 +225,7 @@ async def approve_teacher_application(
 
     await log_admin_action(
         admin_id=current_user["telegram_id"],
-        action="teacher_application_approved",
+        action="teacher_application_approved_from_miniapp",
         entity_type="user",
         entity_id=teacher_id,
         details={
@@ -352,7 +251,7 @@ async def reject_teacher_application(
 
     await log_admin_action(
         admin_id=current_user["telegram_id"],
-        action="teacher_application_rejected",
+        action="teacher_application_rejected_from_miniapp",
         entity_type="user",
         entity_id=teacher_id,
         details={
@@ -412,7 +311,7 @@ async def approve_kick_request(
 
     await log_admin_action(
         admin_id=current_user["telegram_id"],
-        action="kick_request_approved",
+        action="kick_request_approved_from_miniapp",
         entity_type="kick_request",
         entity_id=request_id,
         details={
@@ -450,7 +349,7 @@ async def reject_kick_request(
 
     await log_admin_action(
         admin_id=current_user["telegram_id"],
-        action="kick_request_rejected",
+        action="kick_request_rejected_from_miniapp",
         entity_type="kick_request",
         entity_id=request_id,
         details={
