@@ -7,7 +7,6 @@ from pydantic import BaseModel
 from api.security import require_roles
 from database.db import (
     count_api_superadmin_users,
-    count_superadmins,
     get_admin_action_detail,
     get_api_superadmin_admin_actions,
     get_api_superadmin_admins,
@@ -74,26 +73,20 @@ def validate_staff_role(role: str):
         )
 
 
-async def protect_superadmin_demote(
+def protect_self_superadmin_role_change(
     target_telegram_id: int,
     current_superadmin_id: int,
-    old_role: Optional[str],
     new_role: str
 ):
+    """
+    Superadmin o'zining role'ini boshqa role'ga o'zgartira olmaydi.
+    Boshqa user/superadmin role'larini boshqarish mumkin.
+    """
     if target_telegram_id == current_superadmin_id and new_role != "superadmin":
         raise HTTPException(
             status_code=400,
             detail="O'zingizning superadmin rolingizni o'zgartira olmaysiz."
         )
-
-    if old_role == "superadmin" and new_role != "superadmin":
-        superadmin_count = await count_superadmins()
-
-        if superadmin_count <= 1:
-            raise HTTPException(
-                status_code=400,
-                detail="Oxirgi superadminni boshqa rolga o'tkazib bo'lmaydi."
-            )
 
 
 # ==========================================
@@ -185,10 +178,9 @@ async def superadmin_change_user_role(
 
     old_role = target_user["role"]
 
-    await protect_superadmin_demote(
+    protect_self_superadmin_role_change(
         target_telegram_id=telegram_id,
         current_superadmin_id=current_superadmin_id,
-        old_role=old_role,
         new_role=new_role
     )
 
@@ -267,13 +259,12 @@ async def superadmin_set_staff_role(
 
     validate_staff_role(payload.role)
 
-    old_role = await get_api_superadmin_user(payload.telegram_id)
-    old_role_value = old_role["role"] if old_role else "user"
+    old_user = await get_api_superadmin_user(payload.telegram_id)
+    old_role_value = old_user["role"] if old_user else "user"
 
-    await protect_superadmin_demote(
+    protect_self_superadmin_role_change(
         target_telegram_id=payload.telegram_id,
         current_superadmin_id=current_superadmin_id,
-        old_role=old_role_value,
         new_role=payload.role
     )
 
