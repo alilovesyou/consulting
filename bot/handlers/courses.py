@@ -164,27 +164,22 @@ def languages_keyboard():
 
 def payment_notification_keyboard(payment_id: int):
     """
-    Notification ichidagi tugmalar.
-
-    🔎 Ko'rish / Detail — keyingi stepda accounting.py ushlaydi.
-    ✅ / ❌ — hozirgi eski admin.py approve/reject flow bilan compatibility uchun qoldi.
+    Payment notification ichidagi tugmalar.
+    Detail tugmasi olib tashlandi.
+    Approve/reject endi accounting.py orqali ishlaydi.
     """
     builder = InlineKeyboardBuilder()
 
     builder.button(
-        text="🔎 Ko‘rish / Detail",
-        callback_data=AccountingPaymentCB(payment_id=payment_id, action="detail")
-    )
-    builder.button(
         text="✅ Tasdiqlash",
-        callback_data=AdminApproveCB(payment_id=payment_id)
+        callback_data=AccountingPaymentCB(payment_id=payment_id, action="approve")
     )
     builder.button(
         text="❌ Rad etish",
-        callback_data=AdminRejectCB(payment_id=payment_id)
+        callback_data=AccountingPaymentCB(payment_id=payment_id, action="reject")
     )
 
-    builder.adjust(1, 2)
+    builder.adjust(2)
     return builder.as_markup()
 
 

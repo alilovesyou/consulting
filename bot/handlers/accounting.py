@@ -28,6 +28,8 @@ from utils.states import (
     AccountingPaymentCB,
     AccountingAssignGroupCB,
     AccountingRejectState,
+    AdminApproveCB,
+    AdminRejectCB,
 )
 
 accounting_router = Router()
@@ -206,14 +208,32 @@ async def user_lang(user_id: int) -> str:
 
 async def safe_edit_text(message: types.Message, text: str, **kwargs):
     """
-    Telegram 'message is not modified' errorini yutib yuboradi.
-    Boshqa error bo'lsa qayta chiqaradi.
+    Text message bo'lsa edit_text qiladi.
+    Photo/document captionli message bo'lsa edit_caption qiladi.
+    Agar edit qilib bo'lmasa, yangi message yuboradi.
     """
     try:
         await message.edit_text(text, **kwargs)
+        return
     except TelegramBadRequest as e:
-        if "message is not modified" in str(e):
+        error_text = str(e).lower()
+
+        if "message is not modified" in error_text:
             return
+
+        if "there is no text in the message to edit" in error_text:
+            try:
+                await message.edit_caption(caption=text, **kwargs)
+                return
+            except TelegramBadRequest as caption_error:
+                caption_error_text = str(caption_error).lower()
+
+                if "message is not modified" in caption_error_text:
+                    return
+
+                await message.answer(text, **kwargs)
+                return
+
         raise
 
 
@@ -835,3 +855,39 @@ async def reject_payment_final(message: types.Message, state: FSMContext):
         pass
 
     await state.clear()
+
+# ==========================================
+# LEGACY PAYMENT NOTIFICATION CALLBACKS
+# Eski notificationlarda qolgan AdminApproveCB/AdminRejectCB tugmalarini
+# yangi accounting flowga yo'naltiramiz.
+# ==========================================
+
+@accounting_router.callback_query(AdminApproveCB.filter())
+async def legacy_admin_approve_payment(
+    callback: types.CallbackQuery,
+    callback_data: AdminApproveCB
+):
+    await approve_payment_start(
+        callback,
+        AccountingPaymentCB(
+            payment_id=callback_data.payment_id,
+            action="approve"
+        )
+    )
+
+
+@accounting_router.callback_query(AdminRejectCB.filter())
+async def legacy_admin_reject_payment(
+    callback: types.CallbackQuery,
+    callback_data: AdminRejectCB,
+    state: FSMContext
+):
+    await reject_payment_start(
+        callback,
+        AccountingPaymentCB(
+            payment_id=callback_data.payment_id,
+            action="reject"
+        ),
+        state
+    )
+

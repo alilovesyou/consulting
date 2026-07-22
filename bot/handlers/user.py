@@ -224,18 +224,11 @@ async def user_lang(user_id: int) -> str:
 # ==========================================
 
 def mini_app_button_row(lang: str = "uz"):
-    """MINI_APP_URL bo'lsa, Mini App tugmasini qaytaradi"""
-    mini_app_url = os.getenv("MINI_APP_URL")
-
-    if not mini_app_url:
-        return None
-
-    return [
-        types.KeyboardButton(
-            text=t("mini_app", lang),
-            web_app=WebAppInfo(url=mini_app_url)
-        )
-    ]
+    """
+    Mini App reply keyboard tugmasi olib tashlandi.
+    Telegramning ko'k Mini App menu buttoni ishlatiladi.
+    """
+    return None
 
 
 def back_kb(lang: str = "uz"):
