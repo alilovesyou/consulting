@@ -67,9 +67,9 @@ LOCAL_TEXTS = {
         "en": "💵 By cash",
     },
     "card_payment": {
-        "uz": "💳 <b>Karta orqali to'lov</b>\n\nKarta raqami: <code>8600 1234 5678 9012</code>\nQabul qiluvchi: Visa & Language Consulting\n\nTo'lovni amalga oshirgach, <b>chek rasmini (skrinshot) yoki PDF faylini</b> shu yerga yuboring:",
-        "ru": "💳 <b>Оплата картой</b>\n\nНомер карты: <code>8600 1234 5678 9012</code>\nПолучатель: Visa & Language Consulting\n\nПосле оплаты отправьте сюда <b>фото чека, скриншот или PDF-файл</b>:",
-        "en": "💳 <b>Card payment</b>\n\nCard number: <code>8600 1234 5678 9012</code>\nRecipient: Visa & Language Consulting\n\nAfter payment, please send <b>a receipt photo, screenshot, or PDF file</b> here:",
+        "uz": "💳 <b>Karta orqali to'lov</b>\n\nKarta raqami: <code>5614 6822 1408 3919</code>\nQabul qiluvchi: Yoqubjon Musayev\n\nTo'lovni amalga oshirgach, <b>chek rasmini (skrinshot) yoki PDF faylini</b> shu yerga yuboring:",
+        "ru": "💳 <b>Оплата картой</b>\n\nНомер карты: <code>5614 6822 1408 3919</code>\nПолучатель: Ёкубжон Мусаев\n\nПосле оплаты отправьте сюда <b>фото чека, скриншот или PDF-файл</b>:",
+        "en": "💳 <b>Card payment</b>\n\nCard number: <code>5614 6822 1408 3919</code>\nRecipient: Yoqubjon Musayev\n\nAfter payment, please send <b>a receipt photo, screenshot, or PDF file</b> here:",
     },
     "cash_payment_info": {
         "uz": "🏢 <b>Ofisimiz manzili:</b> Sirdaryo viloyati, Guliston shahri, IT Park binosi.\n\nKelib to'lovni amalga oshirganingizdan so'ng, accounting/admin tizimda tasdiqlaydi va siz guruhga qo'shilasiz.",
